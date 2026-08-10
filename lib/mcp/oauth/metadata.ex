@@ -10,12 +10,20 @@ defmodule MCP.OAuth.Metadata do
   `/introspect`, `/revoke` suffixes; pass `:authorization_endpoint` etc. in
   `opts` to override where the host app actually mounts them.
   `opts[:scopes]` becomes `scopes_supported` (default `[]`).
+
+  `registration_endpoint` is the one field that is opt-in rather than
+  defaulted: an advertised registration endpoint is a promise that clients
+  act on immediately, so it appears only when the host passes
+  `:registration_endpoint`, having actually mounted
+  `MCP.OAuth.Plug.Register`.
   """
   @spec document(String.t(), keyword()) :: map()
   def document(issuer, opts \\ []) do
     issuer = String.trim_trailing(issuer, "/")
 
-    %{
+    opts
+    |> Keyword.get(:registration_endpoint)
+    |> put_registration_endpoint(%{
       "issuer" => issuer,
       "authorization_endpoint" =>
         Keyword.get(opts, :authorization_endpoint, issuer <> "/authorize"),
@@ -32,6 +40,11 @@ defmodule MCP.OAuth.Metadata do
         "client_secret_basic",
         "client_secret_post"
       ]
-    }
+    })
   end
+
+  defp put_registration_endpoint(nil, document), do: document
+
+  defp put_registration_endpoint(url, document),
+    do: Map.put(document, "registration_endpoint", url)
 end

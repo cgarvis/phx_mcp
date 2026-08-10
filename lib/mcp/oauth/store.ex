@@ -5,6 +5,10 @@ defmodule MCP.OAuth.Store do
   Every argument and lookup key crossing this boundary is a hash, never a
   plaintext secret — see `MCP.OAuth.Secret`.
 
+  `put_client/1` is what `MCP.OAuth.Plug.Register` writes a self-registered
+  client through. A store that does not mount that endpoint can implement it
+  as `{:error, :not_supported}`; nothing else in `MCP.OAuth` calls it.
+
   `take_code/1` MUST be atomic delete-on-read: fetch and remove the code in
   one indivisible operation (a DB transaction with a row lock and a delete,
   or a single-process serializer like an `Agent`/`GenServer` handling both
@@ -17,6 +21,7 @@ defmodule MCP.OAuth.Store do
   alias MCP.OAuth.{Client, Code, Token}
 
   @callback get_client(id :: String.t()) :: {:ok, Client.t()} | :error
+  @callback put_client(Client.t()) :: :ok | {:error, term()}
   @callback put_code(Code.t()) :: :ok | {:error, term()}
   @callback take_code(code_hash :: String.t()) :: {:ok, Code.t()} | :error
   @callback put_token(Token.t()) :: :ok | {:error, term()}

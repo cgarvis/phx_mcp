@@ -23,9 +23,12 @@ defmodule MCP.OAuth.Store.Memory do
     Agent.start_link(fn -> %{clients: %{}, codes: %{}, tokens: %{}, refresh: %{}} end, name: name)
   end
 
-  @doc "Registers a client for the given instance — test/dev seeding, not a Store callback."
+  @impl MCP.OAuth.Store
+  def put_client(%Client{} = client), do: put_client(__MODULE__, client)
+
+  @doc "Registers a client on a named instance — the same write, addressed explicitly."
   @spec put_client(GenServer.name(), Client.t()) :: :ok
-  def put_client(name \\ __MODULE__, %Client{} = client) do
+  def put_client(name, %Client{} = client) do
     Agent.update(name, &put_in(&1, [:clients, client.id], client))
   end
 

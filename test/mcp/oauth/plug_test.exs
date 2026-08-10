@@ -43,6 +43,17 @@ defmodule MCP.OAuth.PlugTest do
       assert body["scopes_supported"] == ["profile:read"]
       assert body["code_challenge_methods_supported"] == ["S256"]
       refute Map.has_key?(body, "jwks_uri")
+      refute Map.has_key?(body, "registration_endpoint")
+    end
+
+    test "advertises registration only where the host mounted it" do
+      body =
+        :get
+        |> conn("/")
+        |> call(MCP.OAuth.Plug.Metadata, issuer: @issuer, registration_endpoint: true)
+        |> json()
+
+      assert body["registration_endpoint"] == @issuer <> "/oauth/register"
     end
   end
 

@@ -18,7 +18,7 @@ defmodule MCP.OAuth do
   already a `MCP.OAuth.Secret.hash/1` value.
   """
 
-  alias MCP.OAuth.{Client, Code, PKCE, Secret, Token}
+  alias MCP.OAuth.{Client, Code, PKCE, Request, Secret, Token}
 
   @code_ttl_seconds 60
   @access_ttl_seconds 3600
@@ -48,14 +48,74 @@ defmodule MCP.OAuth do
           | {:error, {:invalid_redirect, atom()}}
           | {:error, {:redirect, String.t(), map()}}
   def authorize(store, params, resource_owner) do
+    with {:ok, request} <- prepare(store, params) do
+      grant(store, request, resource_owner)
+    end
+  end
+
+  @doc """
+  Validates an authorization request without issuing anything.
+
+  This is `authorize/3` stopped one step short of the code: the client, the
+  redirect_uri, the response_type, PKCE, and the requested scope have all
+  been checked, so the result is safe to show a resource owner and ask them
+  about. Errors take the same two shapes `authorize/3` returns.
+
+  Hold the returned `MCP.OAuth.Request` across a consent round trip and mint
+  from it with `grant/3`, or refuse with `deny/1`.
+  """
+  @spec prepare(module(), params()) ::
+          {:ok, Request.t()}
+          | {:error, {:invalid_redirect, atom()}}
+          | {:error, {:redirect, String.t(), map()}}
+  def prepare(store, params) do
     with {:ok, client} <- fetch_client_for_redirect(store, params["client_id"]),
          {:ok, redirect_uri} <- match_redirect_uri(client, params["redirect_uri"]),
          :ok <- check_response_type(params["response_type"], redirect_uri, params["state"]),
          :ok <- check_pkce_present(client, params, redirect_uri, params["state"]),
          {:ok, scope} <-
            check_authorize_scope(client, params["scope"], redirect_uri, params["state"]) do
-      issue_code(store, client, redirect_uri, scope, params, resource_owner)
+      {:ok, %Request{client: client, redirect_uri: redirect_uri, scope: scope, params: params}}
     end
+  end
+
+  @doc """
+  Mints the authorization code for an already-validated `request`.
+
+  The scope, redirect_uri, and PKCE challenge come off the request, not off
+  whatever transport carried the approval back, so an approval can only ever
+  grant what `prepare/2` validated.
+  """
+  @spec grant(module(), Request.t(), String.t()) ::
+          {:ok, %{redirect_uri: String.t(), query: %{code: String.t(), state: term()}}}
+          | {:error, {:redirect, String.t(), map()}}
+  def grant(store, %Request{} = request, resource_owner) do
+    issue_code(
+      store,
+      request.client,
+      request.redirect_uri,
+      request.scope,
+      request.params,
+      resource_owner
+    )
+  end
+
+  @doc """
+  The RFC 6749 §4.1.2.1 `access_denied` response for a refused `request`.
+
+  Shaped like `prepare/2`'s recoverable error so a caller can feed it
+  through the same redirect branch: the client is told no, at a redirect
+  target that was validated before it was ever used.
+  """
+  @spec deny(Request.t()) :: {:error, {:redirect, String.t(), map()}}
+  def deny(%Request{} = request) do
+    {:error,
+     redirect_error(
+       request.redirect_uri,
+       "access_denied",
+       "the resource owner denied the request",
+       request.params["state"]
+     )}
   end
 
   defp fetch_client_for_redirect(store, client_id) when is_binary(client_id) do

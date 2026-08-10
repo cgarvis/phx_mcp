@@ -47,4 +47,19 @@ defmodule MCP.OAuth.MetadataTest do
   test "defaults scopes_supported to an empty list" do
     assert Metadata.document("https://auth.example.com")["scopes_supported"] == []
   end
+
+  describe "registration_endpoint" do
+    test "is absent unless the host says it mounted one" do
+      refute Map.has_key?(Metadata.document("https://auth.example.com"), "registration_endpoint")
+    end
+
+    test "is advertised verbatim when passed" do
+      doc =
+        Metadata.document("https://auth.example.com",
+          registration_endpoint: "https://auth.example.com/oauth/register"
+        )
+
+      assert doc["registration_endpoint"] == "https://auth.example.com/oauth/register"
+    end
+  end
 end
