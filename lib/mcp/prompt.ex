@@ -43,21 +43,51 @@ defmodule MCP.Prompt do
   for non-text content (images, resource links, embedded resources), passed
   through as-is.
 
+  A message may carry annotations as a third element, validated by
+  `MCP.Annotations`:
+
+      {:user, "Draft the summary.", audience: [:assistant], priority: 0.9}
+
+  The spec puts `Annotations` on the *content block*, not on `Prompt` -- a
+  prompt object has only `name`, `title`, `description`, `arguments`, and
+  `icons` -- so there is no `annotations:` option on `use MCP.Prompt`, and
+  this is where the audience/priority hints belong instead.
+
   A caller whose scopes don't cover `scopes/0` cannot list or get the prompt;
   the error is identical to a nonexistent name.
+
+  An optional `complete/3` answers `completion/complete` for one of the
+  prompt's own declared argument names: `arg_name` is that name, `value` is
+  the partial text typed so far (possibly `""`). `{:ok, values}` is the
+  candidate list — the implementation does its own prefix filtering, and the
+  caller (`MCP.Server`) truncates it to 100 entries — while `:error` means
+  there are no completions for that argument name. A module that does not
+  export `complete/3` simply yields no completions.
   """
 
-  @type message :: {:user, String.t()} | {:assistant, String.t()} | map()
+  @type annotations :: keyword()
+
+  @type message ::
+          {:user, String.t()}
+          | {:assistant, String.t()}
+          | {:user, String.t(), annotations()}
+          | {:assistant, String.t(), annotations()}
+          | map()
 
   @callback name() :: String.t()
   @callback description() :: String.t()
   @callback scopes() :: [String.t()]
+  @callback title() :: String.t() | nil
   @callback get(args :: struct(), ctx :: MCP.Context.t()) ::
               {:ok, [message]} | {:error, String.t()}
+  @callback complete(arg_name :: String.t(), value :: String.t(), ctx :: MCP.Context.t()) ::
+              {:ok, [String.t()]} | :error
+  @optional_callbacks complete: 3
 
   defmacro __using__(opts) do
     name = Keyword.fetch!(opts, :name)
     scopes = Keyword.get(opts, :scopes, [])
+    title = Keyword.get(opts, :title)
 
     quote do
       @behaviour MCP.Prompt
@@ -71,6 +101,9 @@ defmodule MCP.Prompt do
 
       @impl MCP.Prompt
       def scopes, do: unquote(scopes)
+
+      @impl MCP.Prompt
+      def title, do: unquote(title)
     end
   end
 

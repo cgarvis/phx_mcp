@@ -78,7 +78,64 @@ defmodule MCP.PlugTest do
     end
   end
 
+  describe "auth with allow_anonymous" do
+    test "no authorization header is served with an empty context" do
+      conn = anon_dispatch(request("tools/list"), token: nil)
+
+      assert conn.status == 200
+
+      names = Enum.map(Jason.decode!(conn.resp_body)["result"]["tools"], & &1["name"])
+      assert "echo" in names
+      refute "secret" in names
+    end
+
+    # The whole point: an ungated resource is readable with no credential at all.
+    test "an ungated resource reads anonymously" do
+      conn = anon_dispatch(request("resources/read", %{"uri" => "test://note"}), token: nil)
+
+      assert conn.status == 200
+      assert [%{"uri" => "test://note"}] = Jason.decode!(conn.resp_body)["result"]["contents"]
+    end
+
+    test "a scoped resource stays invisible to an anonymous caller" do
+      conn = anon_dispatch(request("resources/read", %{"uri" => "test://secret"}), token: nil)
+
+      assert Jason.decode!(conn.resp_body)["error"]["code"] == -32602
+    end
+
+    # A presented credential is still a credential: bad ones fail closed.
+    test "a bad token still 401s rather than falling back to anonymous" do
+      conn = anon_dispatch(request("tools/list"), token: "nope")
+      assert conn.status == 401
+    end
+
+    test "a valid token still carries its scopes" do
+      conn = anon_dispatch(request("tools/list"), token: "tok-full")
+
+      names = Enum.map(Jason.decode!(conn.resp_body)["result"]["tools"], & &1["name"])
+      assert "secret" in names
+    end
+  end
+
   def mfa_base_url, do: "https://mfa.test"
+
+  @anon_opts MCP.Plug.init(
+               server: TestServer,
+               auth: {MCP.Auth.Static, tokens: %{"tok-full" => {"alice", ["secret:read"]}}},
+               allow_anonymous: true
+             )
+
+  defp anon_dispatch(body, opts) do
+    token = Keyword.get(opts, :token)
+
+    conn(:post, "/", Jason.encode!(body))
+    |> put_req_header("content-type", "application/json")
+    |> then(fn conn ->
+      if token, do: put_req_header(conn, "authorization", "Bearer #{token}"), else: conn
+    end)
+    |> Map.replace!(:secret_key_base, @secret)
+    |> MCP.Plug.call(@anon_opts)
+  end
 
   describe "transport shape" do
     test "malformed JSON is a -32700 with HTTP 400" do

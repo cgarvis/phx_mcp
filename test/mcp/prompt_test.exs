@@ -3,6 +3,39 @@ defmodule MCP.PromptTest do
 
   alias MCP.TestSupport.{ReviewPrompt, SecretPrompt}
 
+  defmodule TitledPrompt do
+    @moduledoc false
+
+    use MCP.Prompt, name: "titled", title: "A Titled Prompt", scopes: []
+
+    @impl true
+    def description, do: "Has a title"
+
+    @impl true
+    def get(_args, _ctx), do: {:ok, [{:user, "hi"}]}
+  end
+
+  defmodule CompletablePrompt do
+    @moduledoc false
+
+    use MCP.Prompt, name: "completable", scopes: []
+
+    @impl true
+    def description, do: "Has a completion callback"
+
+    arguments do
+      field :tone, :string, description: "Review tone"
+    end
+
+    @impl true
+    def get(_args, _ctx), do: {:ok, [{:user, "hi"}]}
+
+    @impl true
+    def complete("tone", value, _ctx) do
+      {:ok, Enum.filter(["kind", "curt", "blunt"], &String.starts_with?(&1, value))}
+    end
+  end
+
   describe "the use macro" do
     test "defines the callbacks from the options" do
       assert ReviewPrompt.name() == "review"
@@ -15,6 +48,20 @@ defmodule MCP.PromptTest do
       assert code_opts[:required] == true
       assert tone_opts[:description] == "Review tone"
       assert SecretPrompt.__mcp_arguments__() == []
+    end
+
+    test "title defaults to nil when undeclared" do
+      assert ReviewPrompt.title() == nil
+      assert SecretPrompt.title() == nil
+    end
+
+    test "title returns the declared value" do
+      assert TitledPrompt.title() == "A Titled Prompt"
+    end
+
+    test "complete/3 is optional: exported when declared, absent otherwise" do
+      assert function_exported?(CompletablePrompt, :complete, 3)
+      refute function_exported?(ReviewPrompt, :complete, 3)
     end
   end
 

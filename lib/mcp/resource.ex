@@ -34,6 +34,13 @@ defmodule MCP.Resource do
   A caller whose scopes don't cover `scopes/0` cannot list or read the
   resource; the read error is identical to a nonexistent URI. For URIs with
   variables, see `MCP.ResourceTemplate`.
+
+  `cache_scope:` and `ttl_ms:` override the server-level `list_cache` default
+  from `MCP.Server` for this resource's own `resources/read` response only —
+  every other resource still gets the server default. `"public"` means the
+  response may be cached and re-served across different callers, so it is
+  only ever correct for data that is identical for everyone: no PHI, no
+  per-member content.
   """
 
   @type content :: binary | {:blob, binary} | map
@@ -43,6 +50,10 @@ defmodule MCP.Resource do
   @callback description() :: String.t()
   @callback mime_type() :: String.t() | nil
   @callback scopes() :: [String.t()]
+  @callback title() :: String.t() | nil
+  @callback annotations() :: map() | nil
+  @callback cache_scope() :: String.t() | nil
+  @callback ttl_ms() :: pos_integer() | nil
   @callback read(ctx :: MCP.Context.t()) ::
               {:ok, content} | {:error, :not_found | String.t()}
 
@@ -50,12 +61,28 @@ defmodule MCP.Resource do
     quote bind_quoted: [opts: opts] do
       @behaviour MCP.Resource
 
-      opts = Keyword.validate!(opts, [:uri, :name, :mime_type, scopes: []])
+      opts =
+        Keyword.validate!(opts, [
+          :uri,
+          :name,
+          :mime_type,
+          :title,
+          :annotations,
+          :cache_scope,
+          :ttl_ms,
+          scopes: []
+        ])
 
       @mcp_resource_uri Keyword.fetch!(opts, :uri)
       @mcp_resource_name Keyword.fetch!(opts, :name)
       @mcp_resource_mime Keyword.get(opts, :mime_type)
       @mcp_resource_scopes Keyword.fetch!(opts, :scopes)
+      @mcp_resource_title Keyword.get(opts, :title)
+      @mcp_resource_annotations MCP.Annotations.resource!(Keyword.get(opts, :annotations))
+      @mcp_resource_cache_scope MCP.Resource.__validate_cache_scope__(
+                                  Keyword.get(opts, :cache_scope)
+                                )
+      @mcp_resource_ttl_ms MCP.Resource.__validate_ttl_ms__(Keyword.get(opts, :ttl_ms))
 
       @impl MCP.Resource
       def uri, do: @mcp_resource_uri
@@ -68,6 +95,31 @@ defmodule MCP.Resource do
 
       @impl MCP.Resource
       def scopes, do: @mcp_resource_scopes
+
+      @impl MCP.Resource
+      def title, do: @mcp_resource_title
+
+      @impl MCP.Resource
+      def annotations, do: @mcp_resource_annotations
+
+      @impl MCP.Resource
+      def cache_scope, do: @mcp_resource_cache_scope
+
+      @impl MCP.Resource
+      def ttl_ms, do: @mcp_resource_ttl_ms
     end
+  end
+
+  @doc false
+  def __validate_cache_scope__(nil), do: nil
+  def __validate_cache_scope__(scope), do: MCP.Server.validate_cache_scope!(scope)
+
+  @doc false
+  def __validate_ttl_ms__(nil), do: nil
+  def __validate_ttl_ms__(ttl_ms) when is_integer(ttl_ms) and ttl_ms > 0, do: ttl_ms
+
+  def __validate_ttl_ms__(ttl_ms) do
+    raise ArgumentError,
+          "invalid MCP.Resource ttl_ms #{inspect(ttl_ms)}, expected a positive integer"
   end
 end

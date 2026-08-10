@@ -37,6 +37,20 @@ defmodule MCP.ResourceTemplate do
   existence oracle. Raising an exception with a 404 `Plug.Exception` status
   (`Repo.get!`, or `defexception plug_status: :not_found`) is equivalent.
   Other returns are as `MCP.Resource.read/1`.
+
+  `cache_scope:` and `ttl_ms:` override the server-level `list_cache` default
+  from `MCP.Server` for this template's own `resources/read` response only.
+  `"public"` means the response may be cached and re-served across different
+  callers, so it is only ever correct for data that is identical for
+  everyone: no PHI, no per-member content.
+
+  An optional `complete/3` answers `completion/complete` for one of the
+  template's own URI variables: `arg_name` is the variable name, `value` is
+  the partial text typed so far (possibly `""`). `{:ok, values}` is the
+  candidate list — the implementation does its own prefix filtering, and the
+  caller (`MCP.Server`) truncates it to 100 entries — while `:error` means
+  there are no completions for that argument name. A module that does not
+  export `complete/3` simply yields no completions.
   """
 
   @callback uri_template() :: String.t()
@@ -44,19 +58,42 @@ defmodule MCP.ResourceTemplate do
   @callback description() :: String.t()
   @callback mime_type() :: String.t() | nil
   @callback scopes() :: [String.t()]
+  @callback title() :: String.t() | nil
+  @callback annotations() :: map() | nil
+  @callback cache_scope() :: String.t() | nil
+  @callback ttl_ms() :: pos_integer() | nil
   @callback read(uri :: String.t(), params :: struct(), ctx :: MCP.Context.t()) ::
               {:ok, MCP.Resource.content()} | {:error, :not_found | String.t()}
+  @callback complete(arg_name :: String.t(), value :: String.t(), ctx :: MCP.Context.t()) ::
+              {:ok, [String.t()]} | :error
+  @optional_callbacks complete: 3
 
   defmacro __using__(opts) do
     quote bind_quoted: [opts: opts] do
       @behaviour MCP.ResourceTemplate
 
-      opts = Keyword.validate!(opts, [:uri_template, :name, :mime_type, scopes: []])
+      opts =
+        Keyword.validate!(opts, [
+          :uri_template,
+          :name,
+          :mime_type,
+          :title,
+          :annotations,
+          :cache_scope,
+          :ttl_ms,
+          scopes: []
+        ])
 
       @mcp_template_uri Keyword.fetch!(opts, :uri_template)
       @mcp_template_name Keyword.fetch!(opts, :name)
       @mcp_template_mime Keyword.get(opts, :mime_type)
       @mcp_template_scopes Keyword.fetch!(opts, :scopes)
+      @mcp_template_title Keyword.get(opts, :title)
+      @mcp_template_annotations MCP.Annotations.resource!(Keyword.get(opts, :annotations))
+      @mcp_template_cache_scope MCP.Resource.__validate_cache_scope__(
+                                  Keyword.get(opts, :cache_scope)
+                                )
+      @mcp_template_ttl_ms MCP.Resource.__validate_ttl_ms__(Keyword.get(opts, :ttl_ms))
 
       # Malformed templates fail here, at the definition site.
       @mcp_template_vars MCP.URITemplate.compile!(@mcp_template_uri).vars
@@ -76,6 +113,18 @@ defmodule MCP.ResourceTemplate do
 
       @impl MCP.ResourceTemplate
       def scopes, do: @mcp_template_scopes
+
+      @impl MCP.ResourceTemplate
+      def title, do: @mcp_template_title
+
+      @impl MCP.ResourceTemplate
+      def annotations, do: @mcp_template_annotations
+
+      @impl MCP.ResourceTemplate
+      def cache_scope, do: @mcp_template_cache_scope
+
+      @impl MCP.ResourceTemplate
+      def ttl_ms, do: @mcp_template_ttl_ms
     end
   end
 end

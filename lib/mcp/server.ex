@@ -62,7 +62,8 @@ defmodule MCP.Server do
           MCP.Server.capabilities(
             tools: @mcp_entries != [],
             resources: @mcp_resource_entries != [] or @mcp_template_entries != [],
-            prompts: @mcp_prompt_entries != []
+            prompts: @mcp_prompt_entries != [],
+            completions: Enum.any?(@mcp_template_entries ++ @mcp_prompt_entries, & &1.completable)
           ),
         "ttlMs" => @mcp_ttl_ms,
         "cacheScope" => @mcp_cache_scope
@@ -80,7 +81,8 @@ defmodule MCP.Server do
     [
       {"tools", present[:tools], %{"listChanged" => false}},
       {"resources", present[:resources], %{"listChanged" => false, "subscribe" => false}},
-      {"prompts", present[:prompts], %{"listChanged" => false}}
+      {"prompts", present[:prompts], %{"listChanged" => false}},
+      {"completions", present[:completions], %{}}
     ]
     |> Enum.filter(fn {_feature, declared?, _payload} -> declared? end)
     |> Map.new(fn {feature, _declared?, payload} -> {feature, payload} end)
@@ -100,20 +102,17 @@ defmodule MCP.Server do
   def build_entries!(modules) do
     entries =
       Enum.map(modules, fn mod ->
-        %{
-          module: mod,
-          name: mod.name(),
-          scopes: mod.scopes(),
-          payload:
-            put_output_schema(
-              %{
-                "name" => mod.name(),
-                "description" => mod.description(),
-                "inputSchema" => mod.input_schema()
-              },
-              mod.output_schema()
-            )
-        }
+        payload =
+          %{
+            "name" => mod.name(),
+            "description" => mod.description(),
+            "inputSchema" => mod.input_schema()
+          }
+          |> maybe_put("title", mod.title())
+          |> maybe_put("annotations", mod.annotations())
+          |> put_output_schema(mod.output_schema())
+
+        %{module: mod, name: mod.name(), scopes: mod.scopes(), payload: payload}
       end)
 
     names = Enum.map(entries, & &1.name)
@@ -136,13 +135,16 @@ defmodule MCP.Server do
         payload =
           %{"uri" => mod.uri(), "name" => mod.name(), "description" => mod.description()}
           |> put_mime(mod.mime_type())
+          |> maybe_put("title", mod.title())
+          |> maybe_put("annotations", mod.annotations())
 
         %{
           module: mod,
           uri: mod.uri(),
           scopes: mod.scopes(),
           mime_type: mod.mime_type(),
-          payload: payload
+          payload: payload,
+          cache_override: cache_override(mod)
         }
       end)
 
@@ -167,13 +169,17 @@ defmodule MCP.Server do
             "description" => mod.description()
           }
           |> put_mime(mod.mime_type())
+          |> maybe_put("title", mod.title())
+          |> maybe_put("annotations", mod.annotations())
 
         %{
           module: mod,
           template: MCP.URITemplate.compile!(mod.uri_template()),
           scopes: mod.scopes(),
           mime_type: mod.mime_type(),
-          payload: payload
+          payload: payload,
+          cache_override: cache_override(mod),
+          completable: completable?(mod)
         }
       end)
 
@@ -195,7 +201,8 @@ defmodule MCP.Server do
           module: mod,
           name: mod.name(),
           scopes: mod.scopes(),
-          payload: prompt_payload(mod)
+          payload: prompt_payload(mod),
+          completable: completable?(mod)
         }
       end)
 
@@ -210,12 +217,28 @@ defmodule MCP.Server do
   end
 
   defp prompt_payload(mod) do
-    base = %{"name" => mod.name(), "description" => mod.description()}
+    base =
+      %{"name" => mod.name(), "description" => mod.description()}
+      |> maybe_put("title", mod.title())
 
     case Enum.map(mod.__mcp_arguments__(), &argument_payload/1) do
       [] -> base
       args -> Map.put(base, "arguments", args)
     end
+  end
+
+  # Only cache_scope/ttl_ms actually declared become override keys, so a
+  # module declaring neither yields %{} and the server default passes through.
+  defp cache_override(mod) do
+    %{}
+    |> maybe_put("cacheScope", mod.cache_scope())
+    |> maybe_put("ttlMs", mod.ttl_ms())
+  end
+
+  # Resolved once at build time: interactive code loading leaves a module
+  # unloaded until first use, so function_exported?/3 alone would read stale.
+  defp completable?(mod) do
+    Code.ensure_loaded?(mod) and function_exported?(mod, :complete, 3)
   end
 
   defp argument_payload({name, opts}) do
@@ -246,6 +269,7 @@ defmodule MCP.Server do
       "resources/templates/list" -> {:ok, templates_list(server, ctx)}
       "prompts/list" -> {:ok, prompts_list(server, ctx)}
       "prompts/get" -> prompts_get(server, req.params, ctx)
+      "completion/complete" -> completion_complete(server, req.params, ctx)
       method -> {:error, {RPC.method_not_found(), "Method not found: #{method}", nil}}
     end
   end
@@ -319,10 +343,13 @@ defmodule MCP.Server do
   defp resources_read(server, params, ctx) do
     with {:ok, uri} <- fetch_resource_uri(params) do
       case find_reader(server, uri, ctx) do
-        {:ok, {meta, mime, fun}} ->
+        {:ok, {meta, mime, cache_override, fun}} ->
+          # Per-resource cache_scope/ttl_ms win key-by-key; the server default fills the rest.
+          cache = Map.merge(server.cache_meta(), cache_override)
+
           meta
           |> telemetry_invoke_read(ctx, fun)
-          |> wrap_read(uri, mime, server.cache_meta())
+          |> wrap_read(uri, mime, cache)
 
         :error ->
           {:error, {RPC.invalid_params(), "Resource not found", %{"uri" => uri}}}
@@ -343,7 +370,7 @@ defmodule MCP.Server do
       %{} = entry ->
         if visible?(entry, ctx) do
           {:ok,
-           {%{kind: :resource, name: entry.uri}, entry.mime_type,
+           {%{kind: :resource, name: entry.uri}, entry.mime_type, entry.cache_override,
             fn -> entry.module.read(ctx) end}}
         else
           :error
@@ -359,7 +386,7 @@ defmodule MCP.Server do
 
               {:ok,
                {%{kind: :resource_template, name: entry.template.source}, entry.mime_type,
-                fn -> entry.module.read(uri, params, ctx) end}}
+                entry.cache_override, fn -> entry.module.read(uri, params, ctx) end}}
 
             :nomatch ->
               nil
@@ -371,6 +398,112 @@ defmodule MCP.Server do
   # Keys are the template's own variables, so the atoms exist from its defstruct.
   defp template_struct(module, params) do
     struct!(module, for({var, value} <- params, do: {String.to_existing_atom(var), value}))
+  end
+
+  @max_completion_values 100
+
+  defp completion_complete(server, params, ctx) do
+    with {:ok, ref, arg_name, value} <- fetch_completion_args(params),
+         {:ok, resolution} <- resolve_completion_ref(server, ref, ctx) do
+      {:ok, completion_result(complete_values(resolution, arg_name, value, ctx))}
+    end
+  end
+
+  defp fetch_completion_args(%{"ref" => ref, "argument" => argument})
+       when is_map(ref) and is_map(argument) do
+    with {:ok, _type} <- fetch_ref_type(ref),
+         {:ok, name} <- fetch_argument_name(argument),
+         {:ok, value} <- fetch_argument_value(argument) do
+      {:ok, ref, name, value}
+    end
+  end
+
+  defp fetch_completion_args(_params),
+    do:
+      {:error,
+       {RPC.invalid_params(), "completion/complete requires \"ref\" and \"argument\" objects",
+        nil}}
+
+  defp fetch_ref_type(%{"type" => type}) when is_binary(type), do: {:ok, type}
+
+  defp fetch_ref_type(_ref),
+    do: {:error, {RPC.invalid_params(), "ref.type must be a string", nil}}
+
+  defp fetch_argument_name(%{"name" => name}) when is_binary(name), do: {:ok, name}
+
+  defp fetch_argument_name(_argument),
+    do: {:error, {RPC.invalid_params(), "argument.name must be a string", nil}}
+
+  # A missing "value" is a valid, empty-prefix completion request.
+  defp fetch_argument_value(%{"value" => value}) when is_binary(value), do: {:ok, value}
+
+  defp fetch_argument_value(%{"value" => _other}),
+    do: {:error, {RPC.invalid_params(), "argument.value must be a string", nil}}
+
+  defp fetch_argument_value(_argument), do: {:ok, ""}
+
+  # ref/resource matches a template's own uriTemplate string, not an expanded URI.
+  defp resolve_completion_ref(server, %{"type" => "ref/resource"} = ref, ctx) do
+    case ref["uri"] do
+      uri when is_binary(uri) ->
+        {:ok, completable_entry(server.template_entries(), &(&1.template.source == uri), ctx)}
+
+      _other ->
+        {:ok, :empty}
+    end
+  end
+
+  defp resolve_completion_ref(server, %{"type" => "ref/prompt"} = ref, ctx) do
+    case ref["name"] do
+      name when is_binary(name) ->
+        {:ok, completable_entry(server.prompt_entries(), &(&1.name == name), ctx)}
+
+      _other ->
+        {:ok, :empty}
+    end
+  end
+
+  defp resolve_completion_ref(_server, _ref, _ctx),
+    do: {:error, {RPC.invalid_params(), "Unknown completion ref type", nil}}
+
+  # Nonexistent, out-of-scope, and non-completable refs all fall to :empty, not
+  # an error -- otherwise the ref/resource and ref/prompt spaces would become
+  # an existence oracle for out-of-scope callers, the same reasoning as
+  # resources/read hiding invisible resources behind "Resource not found".
+  defp completable_entry(entries, matcher, ctx) do
+    case Enum.find(entries, matcher) do
+      %{completable: true} = entry -> if visible?(entry, ctx), do: entry, else: :empty
+      _not_completable_or_missing -> :empty
+    end
+  end
+
+  defp complete_values(:empty, _arg_name, _value, _ctx), do: []
+
+  defp complete_values(entry, arg_name, value, ctx) do
+    meta = %{kind: :completion, name: completion_meta_name(entry)}
+
+    case telemetry_invoke(meta, ctx, fn -> entry.module.complete(arg_name, value, ctx) end) do
+      {:ok, values} when is_list(values) -> values
+      # A raise (:__mcp_raised__, already logged by telemetry_invoke), :error,
+      # or any other shape all answer with no completions rather than an error.
+      _other -> []
+    end
+  end
+
+  defp completion_meta_name(%{template: template}), do: template.source
+  defp completion_meta_name(%{name: name}), do: name
+
+  defp completion_result(values) do
+    truncated = Enum.take(values, @max_completion_values)
+
+    %{
+      "resultType" => "complete",
+      "completion" => %{
+        "values" => truncated,
+        "total" => length(truncated),
+        "hasMore" => length(values) > @max_completion_values
+      }
+    }
   end
 
   defp tools_call(server, params, ctx, opts) do
@@ -543,6 +676,8 @@ defmodule MCP.Server do
   defp outcome({:error, :not_found}), do: :not_found
   defp outcome({:error, _message}), do: :error
   defp outcome({:error, _code, _message}), do: :error
+  # complete/3's bare :error ("no completions for this argument"), not a bug.
+  defp outcome(:error), do: :error
   defp outcome(_other), do: :invalid
 
   defp wrap({:ok, result}, entry, _ctx, _opts) when is_map(result) do
@@ -740,18 +875,37 @@ defmodule MCP.Server do
     {:error, {RPC.internal_error(), "Internal error", nil}}
   end
 
+  # Annotation validation runs here, past the span that guards get/2 itself, so
+  # a rejected annotation is caught into the invalid-message path rather than
+  # escaping dispatch as a 500.
   defp encode_messages(messages) do
     encoded = Enum.map(messages, &encode_message/1)
     if nil in encoded, do: :error, else: {:ok, encoded}
+  rescue
+    error in ArgumentError ->
+      Logger.error("MCP prompt message annotations rejected: #{Exception.message(error)}")
+      :error
   end
 
   defp encode_message({:user, text}) when is_binary(text),
-    do: %{"role" => "user", "content" => %{"type" => "text", "text" => text}}
+    do: text_message("user", text, nil)
 
   defp encode_message({:assistant, text}) when is_binary(text),
-    do: %{"role" => "assistant", "content" => %{"type" => "text", "text" => text}}
+    do: text_message("assistant", text, nil)
+
+  # The spec puts Annotations on the content block, never on the Prompt itself.
+  defp encode_message({:user, text, annotations}) when is_binary(text),
+    do: text_message("user", text, MCP.Annotations.content!(annotations))
+
+  defp encode_message({:assistant, text, annotations}) when is_binary(text),
+    do: text_message("assistant", text, MCP.Annotations.content!(annotations))
 
   # Raw spec-shaped maps (images, resource links, embedded resources) pass through.
   defp encode_message(%{} = raw), do: raw
   defp encode_message(_other), do: nil
+
+  defp text_message(role, text, annotations) do
+    content = %{"type" => "text", "text" => text} |> maybe_put("annotations", annotations)
+    %{"role" => role, "content" => content}
+  end
 end

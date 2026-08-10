@@ -13,6 +13,13 @@ defmodule MCP.Plug do
       or `:any`. Defaults to `[]`: a request carrying an `Origin` header is
       rejected with 403, while non-browser callers (which send none) pass.
       This is the spec's DNS-rebinding defense.
+    * `:allow_anonymous` — serve a caller that presents no `Authorization`
+      header at all, with an empty `MCP.Context` (no principal, no scopes),
+      instead of 401. Default `false`. A *present* token that fails
+      verification still 401s: a bad credential is an error, not an anonymous
+      caller. Turn this on only when the server registers something with
+      `scopes: []`, since scope filtering is then the only thing standing
+      between an anonymous caller and every other tool and resource.
     * `:handle_ttl_ms` — MRTR handle lifetime, default 10 minutes
 
   The `Mcp-Method`/`Mcp-Name` routing headers must agree with the body; a
@@ -36,6 +43,7 @@ defmodule MCP.Plug do
       server: Keyword.fetch!(opts, :server),
       auth: Keyword.fetch!(opts, :auth),
       allowed_origins: Keyword.get(opts, :allowed_origins, []),
+      allow_anonymous: Keyword.get(opts, :allow_anonymous, false),
       handle_ttl_ms: Keyword.get(opts, :handle_ttl_ms, MCP.Handle.default_ttl_ms())
     }
   end
@@ -66,9 +74,18 @@ defmodule MCP.Plug do
     end
   end
 
-  defp authenticate(conn, %{auth: {adapter, opts}}) do
-    with [header] <- get_req_header(conn, "authorization"),
-         [scheme, token] <- String.split(header, " ", parts: 2),
+  # No header at all is the only anonymous case; a malformed or unverifiable
+  # one is a failed credential, which still 401s however the option is set.
+  defp authenticate(conn, %{auth: {adapter, opts}} = config) do
+    case get_req_header(conn, "authorization") do
+      [] -> if config.allow_anonymous, do: {:ok, %MCP.Context{}}, else: :unauthorized
+      [header] -> verify_bearer(conn, header, adapter, opts)
+      _multiple -> :unauthorized
+    end
+  end
+
+  defp verify_bearer(conn, header, adapter, opts) do
+    with [scheme, token] <- String.split(header, " ", parts: 2),
          true <- String.downcase(scheme) == "bearer",
          {:ok, %MCP.Context{} = ctx} <- adapter.verify(conn, token, opts) do
       {:ok, ctx}

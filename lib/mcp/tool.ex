@@ -16,11 +16,30 @@ defmodule MCP.Tool do
         def call(%__MODULE__{name: name}, %MCP.Context{}), do: {:ok, %{greeting: "Hello " <> name}}
       end
 
-  `input` fields support types `:string`, `:integer`, `:number`, `:boolean` and
-  options `required:`, `enum:`, `description:`, `default:`. The same
-  declarations emit the `inputSchema` JSON Schema map at compile time and drive
-  argument validation before `call/2` is invoked — deliberately minimal, not
-  full JSON Schema.
+  `input` fields support types `:string`, `:integer`, `:number`, `:boolean`,
+  `:date`, `:array` and options `required:`, `enum:`, `description:`,
+  `default:`. `:integer` and `:number` additionally take `min:`/`max:`, which
+  emit JSON Schema's `minimum`/`maximum` and are enforced before `call/2`, so
+  a bound never has to be restated in a tool body. A `:date` is a string on
+  the wire, emitted as
+  `{"type": "string", "format": "date"}` and parsed before `call/2`, which
+  receives a `%Date{}` — so no tool re-parses one, and a malformed day is a
+  -32602 like any other bad argument rather than a per-tool error branch. An
+  `:array` field also takes `items:` (required — the element type, one of the
+  four scalars) and `max_items:` (optional). `enum:` on an array field
+  constrains each element, not the list itself, so the schema nests it inside
+  the array's `items` sub-schema rather than on the property. The same
+  declarations emit the `inputSchema` JSON Schema map at compile time and
+  drive argument validation before `call/2` is invoked — deliberately
+  minimal, not full JSON Schema.
+
+  `use MCP.Tool` also takes optional `title:` (a short display label, for
+  clients that show one instead of `name`) and `annotations:`, a keyword list
+  of behaviour hints validated by `MCP.Annotations`:
+
+      annotations: [read_only: true, open_world: false]
+
+  Both are `nil` when not declared.
 
   The fields also define a struct on the tool module, and that struct — not a
   bare map — is what `call/2` receives. Matching `%__MODULE__{}` makes a
@@ -66,17 +85,22 @@ defmodule MCP.Tool do
   @callback name() :: String.t()
   @callback description() :: String.t()
   @callback scopes() :: [String.t()]
+  @callback title() :: String.t() | nil
+  @callback annotations() :: map() | nil
   @callback input_schema() :: map()
   @callback output_schema() :: map() | nil
   @callback call(args :: struct(), MCP.Context.t()) :: result()
   @callback resume(state :: term(), input_responses :: map(), MCP.Context.t()) :: result()
   @optional_callbacks resume: 3
 
-  @field_types [:string, :integer, :number, :boolean]
+  @scalar_types [:string, :integer, :number, :boolean, :date]
+  @field_types @scalar_types ++ [:array]
 
   defmacro __using__(opts) do
     name = Keyword.fetch!(opts, :name)
     scopes = Keyword.get(opts, :scopes, [])
+    title = Keyword.get(opts, :title)
+    annotations = Keyword.get(opts, :annotations)
 
     quote do
       @behaviour MCP.Tool
@@ -92,6 +116,16 @@ defmodule MCP.Tool do
 
       @impl MCP.Tool
       def scopes, do: unquote(scopes)
+
+      @impl MCP.Tool
+      def title, do: unquote(title)
+
+      # Validated at the using module's compile time, so a bad annotation is a
+      # compile error there rather than a silently-ignored key on the wire.
+      @mcp_annotations MCP.Annotations.tool!(unquote(annotations))
+
+      @impl MCP.Tool
+      def annotations, do: @mcp_annotations
     end
   end
 
@@ -181,7 +215,20 @@ defmodule MCP.Tool do
 
   @doc false
   def __field__(name, type, opts) when is_atom(name) and type in @field_types do
-    opts = Keyword.validate!(opts, [:required, :enum, :description, :default])
+    opts =
+      Keyword.validate!(opts, [
+        :required,
+        :enum,
+        :description,
+        :default,
+        :items,
+        :max_items,
+        :min,
+        :max
+      ])
+
+    validate_array_opts!(name, type, opts)
+    validate_bounds!(name, type, opts)
     validate_default!(name, type, opts)
     {name, type, opts}
   end
@@ -190,6 +237,78 @@ defmodule MCP.Tool do
     raise ArgumentError,
           "invalid MCP.Tool field #{inspect(name)}: type #{inspect(type)} " <>
             "must be one of #{inspect(@field_types)}"
+  end
+
+  @numeric_types [:integer, :number]
+
+  # min:/max: are JSON Schema's minimum/maximum, so they only mean anything on
+  # a number. On anything else they would silently never be checked.
+  defp validate_bounds!(name, type, opts) do
+    for bound <- [:min, :max], value = opts[bound], not is_nil(value) do
+      cond do
+        type not in @numeric_types ->
+          raise ArgumentError,
+                "MCP.Tool field #{inspect(name)} declares #{bound}: but is type " <>
+                  "#{inspect(type)}; bounds apply to #{inspect(@numeric_types)}"
+
+        not is_number(value) ->
+          raise ArgumentError,
+                "MCP.Tool field #{inspect(name)} has non-numeric #{bound}: #{inspect(value)}"
+
+        true ->
+          :ok
+      end
+    end
+
+    if is_number(opts[:min]) and is_number(opts[:max]) and opts[:min] > opts[:max] do
+      raise ArgumentError,
+            "MCP.Tool field #{inspect(name)} has min: greater than max:, which admits nothing"
+    end
+
+    :ok
+  end
+
+  # items:/max_items: are array-only, and items: is how an array's elements
+  # get type-checked, so it can't be left out once type is :array.
+  defp validate_array_opts!(name, :array, opts) do
+    case opts[:items] do
+      items when items in @scalar_types ->
+        :ok
+
+      nil ->
+        raise ArgumentError,
+              "MCP.Tool field #{inspect(name)} is type :array and requires items:"
+
+      items ->
+        raise ArgumentError,
+              "MCP.Tool field #{inspect(name)} has invalid items: #{inspect(items)}; " <>
+                "must be one of #{inspect(@scalar_types)}"
+    end
+
+    case opts[:max_items] do
+      nil ->
+        :ok
+
+      max_items when is_integer(max_items) and max_items > 0 ->
+        :ok
+
+      max_items ->
+        raise ArgumentError,
+              "MCP.Tool field #{inspect(name)} has invalid max_items: #{inspect(max_items)}; " <>
+                "must be a positive integer"
+    end
+  end
+
+  defp validate_array_opts!(name, _type, opts) do
+    if Keyword.has_key?(opts, :items) do
+      raise ArgumentError,
+            "MCP.Tool field #{inspect(name)} declares items: but is not type :array"
+    end
+
+    if Keyword.has_key?(opts, :max_items) do
+      raise ArgumentError,
+            "MCP.Tool field #{inspect(name)} declares max_items: but is not type :array"
+    end
   end
 
   # A default is what makes a field optional, so the two are mutually exclusive.
@@ -205,7 +324,7 @@ defmodule MCP.Tool do
 
       true ->
         case check_value(name, type, opts, opts[:default]) do
-          :ok -> :ok
+          {:ok, _coerced} -> :ok
           {:error, message} -> raise ArgumentError, "invalid MCP.Tool default: #{message}"
         end
     end
@@ -214,18 +333,40 @@ defmodule MCP.Tool do
   @doc false
   def build_schema(fields) do
     properties =
-      Map.new(fields, fn {name, type, opts} ->
-        prop = %{"type" => json_type(type)}
-        prop = maybe_put(prop, "description", opts[:description])
-        prop = maybe_put(prop, "enum", opts[:enum])
-        prop = maybe_put(prop, "default", opts[:default])
-        {to_string(name), prop}
-      end)
+      Map.new(fields, fn {name, type, opts} -> {to_string(name), build_property(type, opts)} end)
 
     required = for {name, _, opts} <- fields, opts[:required], do: to_string(name)
 
     %{"type" => "object", "properties" => properties, "additionalProperties" => false}
     |> then(&if required == [], do: &1, else: Map.put(&1, "required", required))
+  end
+
+  # A date is a string on the wire; `format` is what says which kind of string.
+  defp base_property(:date), do: %{"type" => "string", "format" => "date"}
+  defp base_property(type), do: %{"type" => json_type(type)}
+
+  # enum: constrains an array's elements, so it nests inside "items" rather
+  # than sitting on the property like it does for scalar fields.
+  defp build_property(:array, opts) do
+    item_schema =
+      opts[:items]
+      |> base_property()
+      |> maybe_put("enum", opts[:enum])
+
+    %{"type" => json_type(:array), "items" => item_schema}
+    |> maybe_put("maxItems", opts[:max_items])
+    |> maybe_put("description", opts[:description])
+    |> maybe_put("default", opts[:default])
+  end
+
+  defp build_property(type, opts) do
+    type
+    |> base_property()
+    |> maybe_put("description", opts[:description])
+    |> maybe_put("enum", opts[:enum])
+    |> maybe_put("minimum", opts[:min])
+    |> maybe_put("maximum", opts[:max])
+    |> maybe_put("default", opts[:default])
   end
 
   @doc """
@@ -276,7 +417,7 @@ defmodule MCP.Tool do
         case Map.fetch(args, to_string(name)) do
           {:ok, value} ->
             case check_value(name, type, opts, value) do
-              :ok -> {Map.put(acc, name, value), errors}
+              {:ok, coerced} -> {Map.put(acc, name, coerced), errors}
               {:error, message} -> {acc, [message | errors]}
             end
 
@@ -295,6 +436,34 @@ defmodule MCP.Tool do
     end
   end
 
+  defp check_value(name, :array, opts, value) do
+    cond do
+      not is_list(value) ->
+        {:error, "#{name} must be an array"}
+
+      is_integer(opts[:max_items]) and length(value) > opts[:max_items] ->
+        {:error, "#{name} accepts at most #{opts[:max_items]} items"}
+
+      not Enum.all?(value, &correct_type?(opts[:items], &1)) ->
+        {:error, "#{name} items must be #{json_type(opts[:items])}"}
+
+      is_list(opts[:enum]) and not Enum.all?(value, &(&1 in opts[:enum])) ->
+        {:error, "#{name} items must each be one of #{inspect(opts[:enum])}"}
+
+      true ->
+        {:ok, Enum.map(value, &coerce(opts[:items], &1))}
+    end
+  end
+
+  # Arrives as a string and reaches call/2 as a Date: the parse belongs with the
+  # rest of validation, not repeated in every tool that takes a day.
+  defp check_value(name, :date, _opts, value) do
+    case cast_date(value) do
+      {:ok, date} -> {:ok, date}
+      :error -> {:error, "#{name} must be an ISO 8601 date (YYYY-MM-DD)"}
+    end
+  end
+
   defp check_value(name, type, opts, value) do
     cond do
       not correct_type?(type, value) ->
@@ -303,8 +472,14 @@ defmodule MCP.Tool do
       is_list(opts[:enum]) and value not in opts[:enum] ->
         {:error, "#{name} must be one of #{inspect(opts[:enum])}"}
 
+      is_number(opts[:min]) and value < opts[:min] ->
+        {:error, "#{name} must be at least #{opts[:min]}"}
+
+      is_number(opts[:max]) and value > opts[:max] ->
+        {:error, "#{name} must be at most #{opts[:max]}"}
+
       true ->
-        :ok
+        {:ok, value}
     end
   end
 
@@ -312,11 +487,34 @@ defmodule MCP.Tool do
   defp correct_type?(:integer, value), do: is_integer(value)
   defp correct_type?(:number, value), do: is_number(value)
   defp correct_type?(:boolean, value), do: is_boolean(value)
+  defp correct_type?(:array, value), do: is_list(value)
+  defp correct_type?(:date, value), do: match?({:ok, _date}, cast_date(value))
+
+  # Already-cast values pass through so a `default:` can be written as ~D[...].
+  defp cast_date(%Date{} = date), do: {:ok, date}
+
+  defp cast_date(value) when is_binary(value) do
+    case Date.from_iso8601(value) do
+      {:ok, date} -> {:ok, date}
+      {:error, _reason} -> :error
+    end
+  end
+
+  defp cast_date(_value), do: :error
+
+  defp coerce(:date, value) do
+    {:ok, date} = cast_date(value)
+    date
+  end
+
+  defp coerce(_type, value), do: value
 
   defp json_type(:string), do: "string"
   defp json_type(:integer), do: "integer"
   defp json_type(:number), do: "number"
   defp json_type(:boolean), do: "boolean"
+  defp json_type(:array), do: "array"
+  defp json_type(:date), do: "date"
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
