@@ -135,6 +135,22 @@ defmodule MCP.ToolTest do
                d.severity == :error and d.message =~ "unknown key :tekst"
              end)
     end
+
+    # A dotted name serves fine but is silently dropped by Anthropic clients,
+    # so compile time is the only place the mistake surfaces.
+    test "a name with characters Anthropic clients reject is a compile-time error" do
+      source = """
+      defmodule MCP.ToolTest.DottedName do
+        use MCP.Tool, name: "biomarkers.get", scopes: []
+        @impl true
+        def description, do: "dotted"
+        @impl true
+        def call(%__MODULE__{}, _ctx), do: {:ok, %{}}
+      end
+      """
+
+      assert_raise ArgumentError, ~r/"biomarkers_get"/, fn -> Code.eval_string(source) end
+    end
   end
 
   describe "validate_args/2" do

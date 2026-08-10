@@ -96,8 +96,10 @@ defmodule MCP.Prompt do
       Module.register_attribute(__MODULE__, :mcp_arguments, accumulate: true)
       @before_compile MCP.Prompt
 
+      @mcp_name MCP.Name.validate!(unquote(name), "MCP.Prompt")
+
       @impl MCP.Prompt
-      def name, do: unquote(name)
+      def name, do: @mcp_name
 
       @impl MCP.Prompt
       def scopes, do: unquote(scopes)

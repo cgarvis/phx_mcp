@@ -111,8 +111,10 @@ defmodule MCP.Tool do
       @mcp_field_target nil
       @before_compile MCP.Tool
 
+      @mcp_name MCP.Name.validate!(unquote(name), "MCP.Tool")
+
       @impl MCP.Tool
-      def name, do: unquote(name)
+      def name, do: @mcp_name
 
       @impl MCP.Tool
       def scopes, do: unquote(scopes)
