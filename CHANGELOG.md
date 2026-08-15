@@ -21,3 +21,7 @@ developed in-tree under `web/lib/mcp`.
 - Telemetry spans on `[:mcp, :request, :*]` and `[:mcp, :handler, :*]`.
 - `MCP.Legacy`, answering the pre-2026-07-28 handshake from one deletable
   file.
+- `MCP.OAuth.Store.Ecto`, a Postgres-only `MCP.OAuth.Store` generated with
+  `use MCP.OAuth.Store.Ecto, repo: MyApp.Repo`, plus its
+  `mix mcp.gen.oauth.migration` generator. `ecto_sql` is an optional
+  dependency; a host that does not use this adapter pulls nothing new.

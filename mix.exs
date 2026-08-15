@@ -26,8 +26,16 @@ defmodule MCP.MixProject do
       package: package(),
       name: "phx_mcp",
       source_url: @source_url,
-      description: description()
+      description: description(),
+      aliases: aliases()
     ]
+  end
+
+  # `mix test.ecto` needs MIX_ENV=test the same way `mix test` gets it
+  # implicitly -- MCP.Test.Repo only exists in test/support, which only
+  # compiles under :test.
+  def cli do
+    [preferred_envs: ["test.ecto": :test]]
   end
 
   # No supervision tree: the library starts nothing. A host mounts its plugs
@@ -50,6 +58,12 @@ defmodule MCP.MixProject do
       # Finch or Tesla supplies its own transport and never pulls Req; a host
       # that does not use CIMD at all needs neither.
       {:req, "~> 0.5", optional: true},
+      # Optional, same reasoning as `req` above: only MCP.OAuth.Store.Ecto uses
+      # it, and that is one implementation of the MCP.OAuth.Store behaviour. A
+      # host on Memory (or its own store) never pulls ecto_sql. Postgres only
+      # -- see the moduledoc on MCP.OAuth.Store.Ecto for why.
+      {:ecto_sql, "~> 3.10", optional: true},
+      {:postgrex, ">= 0.0.0", only: :test},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end
@@ -66,6 +80,16 @@ defmodule MCP.MixProject do
       # .formatter.exs ships deliberately: it is what gives consumers the
       # DSL's locals_without_parens through import_deps: [:phx_mcp].
       files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
+    ]
+  end
+
+  # `mix test` never touches a database (see MCP.OAuth.Store.Ecto's moduledoc
+  # for why that property matters); `mix test.ecto` opts into the Postgres
+  # suite explicitly, the same split test/test_helper.exs's ExUnit.start/1
+  # exclusion enforces at the ExUnit level.
+  defp aliases do
+    [
+      "test.ecto": ["ecto.create --quiet", "ecto.migrate --quiet", "test --include ecto"]
     ]
   end
 
@@ -87,7 +111,7 @@ defmodule MCP.MixProject do
         ],
         Transport: [MCP.Plug, MCP.Plug.WellKnown, MCP.RPC, MCP.RPC.Request, MCP.Legacy],
         Authentication: [MCP.Auth, MCP.Auth.OAuth, MCP.Auth.Static, MCP.Context],
-        Generators: [Mix.Tasks.Mcp.Gen.Tool],
+        Generators: [Mix.Tasks.Mcp.Gen.Tool, Mix.Tasks.Mcp.Gen.Oauth.Migration],
         "OAuth server": [
           MCP.OAuth,
           MCP.OAuth.Client,
@@ -102,6 +126,12 @@ defmodule MCP.MixProject do
           MCP.OAuth.Store,
           MCP.OAuth.Store.Memory,
           MCP.OAuth.Token
+        ],
+        "OAuth store: Ecto": [
+          MCP.OAuth.Store.Ecto,
+          MCP.OAuth.Store.Ecto.Client,
+          MCP.OAuth.Store.Ecto.Code,
+          MCP.OAuth.Store.Ecto.Token
         ],
         "OAuth endpoints": [
           MCP.OAuth.Plug.Authorize,

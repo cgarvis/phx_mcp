@@ -53,6 +53,56 @@ jobs:
 
       - run: mix test
 
+  # Separate from `test` because it needs a database and that job deliberately
+  # does not: `mix test` excludes :ecto so the default suite stays DB-free (see
+  # test/test_helper.exs). Without this job MCP.OAuth.Store.Ecto would ship
+  # exercised only on whichever machine last ran `mix test.ecto` by hand.
+  ecto:
+    name: Ecto store (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: phx_mcp_test
+        ports: ["5432:5432"]
+        # Steps start as soon as the container does, which is well before
+        # Postgres accepts connections; without this the first connect races.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.1"
+          elixir-version: "1.20.2"
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-ecto-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-ecto-mix-
+
+      - run: mix deps.get
+
+      # test.ecto creates and migrates the database first (mix.exs alias), so
+      # this needs no ecto.setup step of its own.
+      - run: mix test.ecto
+        env:
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_HOST: localhost
+          DB_NAME: phx_mcp_test
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

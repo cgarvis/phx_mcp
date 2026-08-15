@@ -6,6 +6,8 @@
 erl_crash.dump
 *.ez
 *.beam
+# `mix hex.build` output
+/*.tar
 /config/*.secret.exs
 .elixir_ls/
 .lexical/

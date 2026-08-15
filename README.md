@@ -18,10 +18,12 @@ Requires Elixir 1.20 or later. The tool and prompt DSLs emit `defstruct` from
 `@before_compile`, which lands after the `call/2` and `get/2` clauses that match
 on `%__MODULE__{}`; earlier versions reject that as a compile error.
 
-Depends on `plug`, `plug_crypto`, `jason`, and `:telemetry`, plus `req` as an
-optional dependency used by one swappable transport (see CIMD below). No Ecto,
-no Phoenix, no application callback, and nothing it forces you to supervise.
-Everything stateful is a seam the host fills.
+Depends on `plug`, `plug_crypto`, `jason`, and `:telemetry`, plus `req` and
+`ecto_sql` as optional dependencies -- `req` backs one swappable CIMD
+transport (see below), `ecto_sql` backs one swappable `MCP.OAuth.Store`
+implementation (see OAuth below). No Phoenix, no application callback, and
+nothing it forces you to supervise. Everything stateful is a seam the host
+fills.
 
 ## Usage
 
@@ -92,6 +94,15 @@ path lowercased, so the latter would mean defining `Mix.Tasks.Phx.Gen.McpTool`
 inside Phoenix's own namespace, where it lists in `mix help` as though it were
 official and breaks the day Phoenix ships the same name.
 
+    mix mcp.gen.oauth.migration --repo MyApp.Repo
+
+    * creating priv/repo/migrations/20260815120000_create_mcp_oauth_tables.exs
+
+Writes the migration `MCP.OAuth.Store.Ecto` needs: `mcp_oauth_clients`,
+`mcp_oauth_codes`, `mcp_oauth_tokens`. Follows `mix ecto.gen.migration`
+conventions -- timestamped filename, repo resolved from `--repo`/`-r` or
+`:ecto_repos`, written to the target repo's migrations path.
+
 ## Seams
 
 Nothing stateful lives in the library. Each of these is a behaviour the host
@@ -100,7 +111,7 @@ implements:
 | Behaviour | What the host supplies |
 | --- | --- |
 | `MCP.Auth` | Bearer-token verification. `MCP.Auth.OAuth` and `MCP.Auth.Static` ship with the library. |
-| `MCP.OAuth.Store` | Persistence for clients, codes, and tokens. `MCP.OAuth.Store.Memory` ships for tests. |
+| `MCP.OAuth.Store` | Persistence for clients, codes, and tokens. `MCP.OAuth.Store.Memory` ships for tests, `MCP.OAuth.Store.Ecto` for Postgres. |
 | `MCP.OAuth.ResourceOwner` | Who the signed-in user is, for the authorize endpoint. |
 | `MCP.OAuth.Consent` | Rendering the consent screen. The library emits no HTML. |
 
@@ -115,6 +126,31 @@ The library ships a complete authorization server, mounted as four plugs:
 `MCP.OAuth.Plug.Authorize`, `.Token`, `.Metadata`, and `.Register` (RFC 7591
 dynamic client registration). PKCE is required. Open registration is only safe
 behind a consent screen; see `MCP.OAuth.Plug.Authorize`'s `:consent` option.
+
+### Ecto store
+
+`MCP.OAuth.Store.Ecto` is a Postgres-only `MCP.OAuth.Store`, generated with
+`use`:
+
+```elixir
+defmodule MyApp.OAuth.Store do
+  use MCP.OAuth.Store.Ecto, repo: MyApp.Repo
+end
+
+forward "/mcp", MCP.Plug, auth: {MCP.Auth.OAuth, store: MyApp.OAuth.Store}
+```
+
+Postgres only, not "any Ecto adapter": the array-typed columns
+(`redirect_uris`, `scopes`, `grant_types`, `audience`) are `{:array, :string}`,
+and `c:MCP.OAuth.Store.take_code/1`'s atomic delete-on-read compiles to a
+single `DELETE ... RETURNING`. Generate its three tables
+(`mcp_oauth_clients`, `mcp_oauth_codes`, `mcp_oauth_tokens`) with
+`mix mcp.gen.oauth.migration`. See `MCP.OAuth.Store.Ecto`'s moduledoc for the
+full column-by-column reasoning, including two columns typed differently than
+a naive port of an existing OAuth schema might suggest: `sub` as `:string`
+rather than `:binary_id` (this library does not assume your resource owners'
+subjects are UUIDs), and every hash column as `:string` rather than `:binary`
+(`MCP.OAuth.Secret.hash/1` returns lowercase hex).
 
 ## Client ID Metadata Documents
 
