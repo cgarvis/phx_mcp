@@ -4,7 +4,7 @@ defmodule MCP.OAuth.CIMD do
   serves its own RFC 7591 metadata, with no registration step
   (draft-ietf-oauth-client-id-metadata-document).
 
-  This is the seam a host app calls from its `MCP.OAuth.Store.get_client/1`,
+  This is the seam a host app calls from its `c:MCP.OAuth.Store.get_client/1`,
   so `MCP.OAuth` itself stays free of network I/O:
 
       def get_client(id) do
@@ -55,7 +55,7 @@ defmodule MCP.OAuth.CIMD do
   AS can issue, which the document's requested scope is intersected with
   (default `[]`, i.e. a client that can ask for nothing).
 
-  Every failure collapses to `:error`, matching `MCP.OAuth.Store.get_client/1`:
+  Every failure collapses to `:error`, matching `c:MCP.OAuth.Store.get_client/1`:
   an unreachable, malformed, or hostile document is an unknown client, and
   the distinction is not the authorization endpoint's to leak.
   """

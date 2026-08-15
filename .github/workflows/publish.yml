@@ -1,0 +1,52 @@
+name: Publish
+
+# Tag-driven, not branch-driven: a Hex release is immutable, so it should be
+# something you name deliberately rather than a side effect of a merge.
+#
+#     git tag v0.1.0 && git push origin v0.1.0
+#
+# Requires a HEX_API_KEY repository secret. Generate one scoped to this
+# package only:
+#
+#     mix hex.user key generate --key-name phx_mcp-ci --permission package:phx_mcp
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    name: Publish to Hex
+    runs-on: ubuntu-latest
+    environment: hex
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.1"
+          elixir-version: "1.20.2"
+
+      - run: mix deps.get
+
+      # The tag and mix.exs are two places to write a version, so they get
+      # checked against each other before anything immutable happens.
+      - name: Check the tag matches mix.exs
+        run: |
+          project=$(mix run --no-start -e 'IO.puts(Mix.Project.config()[:version])')
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$project" != "$tag" ]; then
+            echo "tag $GITHUB_REF_NAME implies version $tag, but mix.exs says $project" >&2
+            exit 1
+          fi
+          echo "publishing $project"
+
+      - name: Compile with warnings as errors
+        run: MIX_ENV=test mix compile --warnings-as-errors
+
+      - name: Test
+        run: MIX_ENV=test mix test
+
+      - name: Publish
+        run: mix hex.publish --yes
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}

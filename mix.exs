@@ -2,7 +2,7 @@ defmodule MCP.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/moxie-health/phx_mcp"
+  @source_url "https://github.com/cgarvis/phx_mcp"
 
   # The package is `phx_mcp`; the modules are `MCP.*`. Those are independent in
   # Elixir, and the split is conventional: the `plug_crypto` package defines
@@ -55,15 +55,17 @@ defmodule MCP.MixProject do
     [
       name: "phx_mcp",
       licenses: ["MIT"],
-      links: %{"GitHub" => @source_url},
-      files: ~w(lib .formatter.exs mix.exs README.md)
+      links: %{"GitHub" => @source_url, "Changelog" => @source_url <> "/blob/main/CHANGELOG.md"},
+      # .formatter.exs ships deliberately: it is what gives consumers the
+      # DSL's locals_without_parens through import_deps: [:phx_mcp].
+      files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 
   defp docs do
     [
       main: "MCP",
-      extras: ["README.md"],
+      extras: ["README.md", "CHANGELOG.md", "LICENSE"],
       source_ref: "v#{@version}",
       groups_for_modules: [
         Definitions: [MCP.Tool, MCP.Resource, MCP.ResourceTemplate, MCP.Prompt, MCP.Server],

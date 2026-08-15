@@ -162,3 +162,7 @@ there is no collision today. Worth rechecking before a major release.
 Extracted from the Moxie application (`moxie-health/moxie`, `web/lib/mcp`) at
 `39ba703`, with history. It was written as a library from the start: the
 extraction moved 89 files and changed no code.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

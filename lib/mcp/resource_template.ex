@@ -36,7 +36,7 @@ defmodule MCP.ResourceTemplate do
   identical to a URI that matches nothing, so the URI space is not an
   existence oracle. Raising an exception with a 404 `Plug.Exception` status
   (`Repo.get!`, or `defexception plug_status: :not_found`) is equivalent.
-  Other returns are as `MCP.Resource.read/1`.
+  Other returns are as `c:MCP.Resource.read/1`.
 
   `cache_scope:` and `ttl_ms:` override the server-level `list_cache` default
   from `MCP.Server` for this template's own `resources/read` response only.

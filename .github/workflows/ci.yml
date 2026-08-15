@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  MIX_ENV: test
+
+jobs:
+  test:
+    name: Test (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # A library is only as portable as the versions it is exercised on, so
+      # the floor declared in mix.exs (~> 1.17) gets a build rather than a
+      # promise. Newest pair is the one `lint` runs against.
+      matrix:
+        include:
+          - elixir: "1.17.3"
+            otp: "26.2"
+          - elixir: "1.18.4"
+            otp: "27.3"
+          - elixir: "1.20.2"
+            otp: "28.1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-otp${{ matrix.otp }}-elixir${{ matrix.elixir }}-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-otp${{ matrix.otp }}-elixir${{ matrix.elixir }}-mix-
+
+      # Rules out incremental-build flakiness on a retry without paying the
+      # cost on every normal run.
+      - name: Clean on retry
+        if: github.run_attempt != '1'
+        run: mix deps.clean --all && mix clean
+
+      - run: mix deps.get
+
+      - name: Compile with warnings as errors
+        run: mix compile --warnings-as-errors
+
+      - run: mix test
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.1"
+          elixir-version: "1.20.2"
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-lint-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-lint-mix-
+
+      - run: mix deps.get
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      - name: Check for unused deps in the lockfile
+        run: mix deps.unlock --check-unused
+
+      - name: Check for retired dependencies
+        run: mix hex.audit
+
+      # This package publishes to hexdocs, so a docs build that warns is a
+      # broken reference someone will land on.
+      - name: Build docs
+        run: MIX_ENV=dev mix docs --warnings-as-errors

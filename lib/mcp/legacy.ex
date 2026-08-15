@@ -20,8 +20,9 @@ defmodule MCP.Legacy do
 
   Nothing outside this module learns that a second dialect exists.
 
-  To remove: delete this file, then delete `MCP.Plug.dispatch_body/4` and
-  rename `MCP.Plug.dispatch_request/4` to take its place.
+  To remove: delete this file, then in `MCP.Plug` delete the private
+  `dispatch_body/4` and rename the private `dispatch_request/4` to take its
+  place.
   """
 
   alias MCP.RPC
