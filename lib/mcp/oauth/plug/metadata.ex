@@ -18,6 +18,10 @@ defmodule MCP.OAuth.Plug.Metadata do
       or a URL to advertise verbatim. Omitted, the document says nothing about
       registration; set it only where `MCP.OAuth.Plug.Register` is mounted, or
       clients will POST at a 404.
+    * `:cimd_supported` — `true` to advertise
+      `client_id_metadata_document_supported`. Set it only where the store
+      resolves an https `client_id` through `MCP.OAuth.CIMD`, or clients will
+      present a URL the authorize endpoint rejects as an unknown client.
   """
 
   @behaviour Plug
@@ -30,7 +34,8 @@ defmodule MCP.OAuth.Plug.Metadata do
       issuer: Keyword.fetch!(opts, :issuer),
       scopes: Keyword.get(opts, :scopes, []),
       base_path: Keyword.get(opts, :base_path, "/oauth"),
-      registration_endpoint: Keyword.get(opts, :registration_endpoint)
+      registration_endpoint: Keyword.get(opts, :registration_endpoint),
+      cimd_supported: Keyword.get(opts, :cimd_supported)
     }
   end
 
@@ -46,7 +51,8 @@ defmodule MCP.OAuth.Plug.Metadata do
         token_endpoint: base <> "/token",
         introspection_endpoint: base <> "/introspect",
         revocation_endpoint: base <> "/revoke",
-        registration_endpoint: registration_endpoint(config.registration_endpoint, base)
+        registration_endpoint: registration_endpoint(config.registration_endpoint, base),
+        cimd_supported: resolve(config.cimd_supported)
       )
 
     conn

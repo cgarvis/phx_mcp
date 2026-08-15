@@ -38,6 +38,11 @@ defmodule MCP.MixProject do
       {:plug_crypto, "~> 2.1"},
       {:jason, "~> 1.2"},
       {:telemetry, "~> 1.0"},
+      # Optional: only MCP.OAuth.CIMD.ReqTransport uses it, and that is one
+      # implementation of the MCP.OAuth.CIMD.Transport behaviour. A host on
+      # Finch or Tesla supplies its own transport and never pulls Req; a host
+      # that does not use CIMD at all needs neither.
+      {:req, "~> 0.5", optional: true},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end
@@ -62,6 +67,15 @@ defmodule MCP.MixProject do
       source_ref: "v#{@version}",
       groups_for_modules: [
         Definitions: [MCP.Tool, MCP.Resource, MCP.ResourceTemplate, MCP.Prompt, MCP.Server],
+        "Client ID Metadata Documents": [
+          MCP.OAuth.CIMD,
+          MCP.OAuth.CIMD.Cache,
+          MCP.OAuth.CIMD.Document,
+          MCP.OAuth.CIMD.ReqTransport,
+          MCP.OAuth.CIMD.Resolver,
+          MCP.OAuth.CIMD.SSRF,
+          MCP.OAuth.CIMD.Transport
+        ],
         Transport: [MCP.Plug, MCP.Plug.WellKnown, MCP.RPC, MCP.RPC.Request, MCP.Legacy],
         Authentication: [MCP.Auth, MCP.Auth.OAuth, MCP.Auth.Static, MCP.Context],
         Generators: [Mix.Tasks.Mcp.Gen.Tool],

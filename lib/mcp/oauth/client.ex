@@ -14,6 +14,11 @@ defmodule MCP.OAuth.Client do
   `MCP.OAuth.Plug.Register` from one an operator issued by hand: nothing
   vouches for the former beyond its own claims, and a consent screen has to
   be able to say so.
+
+  `cimd?` narrows that further: the client was identified by an https URL it
+  serves its own metadata from (`MCP.OAuth.CIMD`) rather than by an id this
+  server issued. Still self-asserted, but asserted at a domain the client
+  controls, which is a different sentence for a consent screen to write.
   """
 
   @enforce_keys [:id, :redirect_uris, :scopes, :grant_types, :confidential?, :pkce_required?]
@@ -28,7 +33,8 @@ defmodule MCP.OAuth.Client do
     :name,
     :client_uri,
     :logo_uri,
-    dynamically_registered?: false
+    dynamically_registered?: false,
+    cimd?: false
   ]
 
   @type t :: %__MODULE__{
@@ -42,6 +48,7 @@ defmodule MCP.OAuth.Client do
           name: String.t() | nil,
           client_uri: String.t() | nil,
           logo_uri: String.t() | nil,
-          dynamically_registered?: boolean()
+          dynamically_registered?: boolean(),
+          cimd?: boolean()
         }
 end

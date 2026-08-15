@@ -16,14 +16,17 @@ defmodule MCP.OAuth.Metadata do
   act on immediately, so it appears only when the host passes
   `:registration_endpoint`, having actually mounted
   `MCP.OAuth.Plug.Register`.
+
+  `client_id_metadata_document_supported` is opt-in for the same reason —
+  advertising it invites clients to present an https URL as their
+  `client_id`, which only works where the host's store resolves one through
+  `MCP.OAuth.CIMD`. Pass `:cimd_supported`.
   """
   @spec document(String.t(), keyword()) :: map()
   def document(issuer, opts \\ []) do
     issuer = String.trim_trailing(issuer, "/")
 
-    opts
-    |> Keyword.get(:registration_endpoint)
-    |> put_registration_endpoint(%{
+    document = %{
       "issuer" => issuer,
       "authorization_endpoint" =>
         Keyword.get(opts, :authorization_endpoint, issuer <> "/authorize"),
@@ -40,11 +43,20 @@ defmodule MCP.OAuth.Metadata do
         "client_secret_basic",
         "client_secret_post"
       ]
-    })
+    }
+
+    document
+    |> put_registration_endpoint(Keyword.get(opts, :registration_endpoint))
+    |> put_cimd_supported(Keyword.get(opts, :cimd_supported))
   end
 
-  defp put_registration_endpoint(nil, document), do: document
+  defp put_registration_endpoint(document, nil), do: document
 
-  defp put_registration_endpoint(url, document),
+  defp put_registration_endpoint(document, url),
     do: Map.put(document, "registration_endpoint", url)
+
+  defp put_cimd_supported(document, true),
+    do: Map.put(document, "client_id_metadata_document_supported", true)
+
+  defp put_cimd_supported(document, _other), do: document
 end

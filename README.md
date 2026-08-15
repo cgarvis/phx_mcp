@@ -14,9 +14,10 @@ def deps do
 end
 ```
 
-Depends only on `plug`, `plug_crypto`, `jason`, and `:telemetry`. No Ecto, no
-Phoenix, no supervision tree, no application callback. Everything stateful is a
-seam the host fills.
+Depends on `plug`, `plug_crypto`, `jason`, and `:telemetry`, plus `req` as an
+optional dependency used by one swappable transport (see CIMD below). No Ecto,
+no Phoenix, no application callback, and nothing it forces you to supervise.
+Everything stateful is a seam the host fills.
 
 ## Usage
 
@@ -110,6 +111,30 @@ The library ships a complete authorization server, mounted as four plugs:
 `MCP.OAuth.Plug.Authorize`, `.Token`, `.Metadata`, and `.Register` (RFC 7591
 dynamic client registration). PKCE is required. Open registration is only safe
 behind a consent screen; see `MCP.OAuth.Plug.Authorize`'s `:consent` option.
+
+## Client ID Metadata Documents
+
+`MCP.OAuth.CIMD` resolves an `https://` `client_id` by fetching the RFC 7591
+metadata the client serves at that URL, so a client can be identified without
+a registration call (draft-ietf-oauth-client-id-metadata-document).
+
+Fetching a URL an unauthenticated caller chose is the whole risk, so
+`MCP.OAuth.CIMD.Resolver` is https-only, pins the port, resolves DNS once
+through `MCP.OAuth.CIMD.SSRF` and rejects private, loopback, link-local,
+multicast, and metadata addresses, then connects to that exact address so a
+second lookup cannot rebind to a private one. Redirects are re-validated per
+hop rather than followed, the body is capped while streaming, and both connect
+and receive are bounded.
+
+Two things here are optional by construction:
+
+  * `MCP.OAuth.CIMD.Transport` is a behaviour. `ReqTransport` is the default
+    implementation and the only reason `req` appears in the dependency list at
+    all. A host on Finch or Tesla passes `transport:` and never pulls Req.
+  * `MCP.OAuth.CIMD.Cache` is a GenServer over ETS, and reads treat a missing
+    table as a permanent miss. A host that never starts it still resolves, just
+    without caching. Add `MCP.OAuth.CIMD.Cache` to your supervision tree to
+    turn it on.
 
 ## Telemetry
 

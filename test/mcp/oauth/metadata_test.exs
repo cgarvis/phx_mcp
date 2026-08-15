@@ -62,4 +62,24 @@ defmodule MCP.OAuth.MetadataTest do
       assert doc["registration_endpoint"] == "https://auth.example.com/oauth/register"
     end
   end
+
+  describe "client_id_metadata_document_supported" do
+    test "is absent unless the host resolves CIMD client_ids" do
+      doc = Metadata.document("https://auth.example.com")
+
+      refute Map.has_key?(doc, "client_id_metadata_document_supported")
+    end
+
+    test "is absent when the host passes false, not advertised as false" do
+      doc = Metadata.document("https://auth.example.com", cimd_supported: false)
+
+      refute Map.has_key?(doc, "client_id_metadata_document_supported")
+    end
+
+    test "is advertised when the host passes true" do
+      doc = Metadata.document("https://auth.example.com", cimd_supported: true)
+
+      assert doc["client_id_metadata_document_supported"] == true
+    end
+  end
 end
