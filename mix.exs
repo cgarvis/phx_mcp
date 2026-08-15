@@ -99,6 +99,7 @@ defmodule MCP.MixProject do
       extras: ["README.md", "CHANGELOG.md", "LICENSE"],
       source_ref: "v#{@version}",
       groups_for_modules: [
+        Router: [MCP.Router],
         Definitions: [MCP.Tool, MCP.Resource, MCP.ResourceTemplate, MCP.Prompt, MCP.Server],
         "Client ID Metadata Documents": [
           MCP.OAuth.CIMD,
@@ -116,6 +117,7 @@ defmodule MCP.MixProject do
           MCP.OAuth,
           MCP.OAuth.Client,
           MCP.OAuth.Code,
+          MCP.OAuth.Config,
           MCP.OAuth.Consent,
           MCP.OAuth.Metadata,
           MCP.OAuth.PKCE,

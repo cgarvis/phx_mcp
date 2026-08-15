@@ -25,3 +25,21 @@ developed in-tree under `web/lib/mcp`.
   `use MCP.OAuth.Store.Ecto, repo: MyApp.Repo`, plus its
   `mix mcp.gen.oauth.migration` generator. `ecto_sql` is an optional
   dependency; a host that does not use this adapter pulls nothing new.
+- `MCP.Router`: Phoenix router macros. `mcp/2` mounts `MCP.Plug`; `mcp_oauth/2`
+  mounts all six OAuth endpoints (authorize, token, introspect, revoke,
+  register, metadata), with `:only`/`:except` to mount a subset. No `:phoenix`
+  dependency; the macros generate `scope`/`pipe_through`/`forward` calls
+  resolved in the caller's own router.
+- `MCP.OAuth.Config`: reads authorization-server identity (`:store`,
+  `:resource_owner`, `:consent`, `:issuer`, `:scopes`, `:default_resource`)
+  from `config :otp_app, MCP.OAuth, ...`, which `mcp_oauth/2` falls back to
+  for whichever of those a call site does not pass explicitly. `:issuer`,
+  `:scopes`, and `:default_resource` are re-read on every request rather than
+  baked in when the router compiles, so a `runtime.exs` override of them
+  takes effect.
+- `mount: :endpoint` on `MCP.Plug.WellKnown` and `MCP.OAuth.Plug.Metadata`,
+  for mounting `/.well-known/oauth-protected-resource` (RFC 9728) and
+  `/.well-known/oauth-authorization-server` (RFC 8414) directly in
+  `endpoint.ex`, ahead of the router, where no `scope` prefix can shift them
+  off the absolute path their RFC fixes. The existing forwarded mode
+  (`mount: :forward`, the default) is unchanged.

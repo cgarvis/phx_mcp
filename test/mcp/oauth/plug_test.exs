@@ -55,6 +55,81 @@ defmodule MCP.OAuth.PlugTest do
 
       assert body["registration_endpoint"] == @issuer <> "/oauth/register"
     end
+
+    # Proves issuer is read in call/2, not baked into init/1's returned map:
+    # a router's `forward` calls init/1 once, at compile time, so anything
+    # resolved there would make a runtime.exs override of MCP.OAuth's config
+    # silently do nothing in production. {MCP.OAuth.Config, :fetch, [...]}
+    # is exactly what MCP.Router's mcp_oauth/2 passes as :issuer when the
+    # host did not supply one explicitly (see MCP.OAuth.Config).
+    test "an {m, f, a} issuer (as MCP.Router defaults to) re-reads config on every call" do
+      Application.put_env(:mcp_plug_test_issuer, MCP.OAuth, issuer: "https://before.test")
+      on_exit(fn -> Application.delete_env(:mcp_plug_test_issuer, MCP.OAuth) end)
+
+      opts =
+        MCP.OAuth.Plug.Metadata.init(
+          issuer: {MCP.OAuth.Config, :fetch, [:mcp_plug_test_issuer, :issuer]}
+        )
+
+      assert :get
+             |> conn("/")
+             |> MCP.OAuth.Plug.Metadata.call(opts)
+             |> json()
+             |> Map.fetch!("issuer") ==
+               "https://before.test"
+
+      Application.put_env(:mcp_plug_test_issuer, MCP.OAuth, issuer: "https://after.test")
+
+      assert :get
+             |> conn("/")
+             |> MCP.OAuth.Plug.Metadata.call(opts)
+             |> json()
+             |> Map.fetch!("issuer") ==
+               "https://after.test"
+    end
+
+    test "an invalid :mount is a clear error" do
+      assert_raise ArgumentError, ~r/:mount must be :forward or :endpoint/, fn ->
+        MCP.OAuth.Plug.Metadata.init(issuer: @issuer, mount: :bogus)
+      end
+    end
+  end
+
+  describe "MCP.OAuth.Plug.Metadata, mount: :endpoint" do
+    setup do
+      opts = MCP.OAuth.Plug.Metadata.init(issuer: @issuer, mount: :endpoint)
+      {:ok, opts: opts}
+    end
+
+    test "serves the document at the fixed well-known path", %{opts: opts} do
+      body =
+        :get
+        |> conn("/.well-known/oauth-authorization-server")
+        |> MCP.OAuth.Plug.Metadata.call(opts)
+        |> json()
+
+      assert body["issuer"] == @issuer
+    end
+
+    # No path-inserted sub-path variant exists for RFC 8414, unlike RFC
+    # 9728's well-known resource document, so unlike MCP.Plug.WellKnown
+    # there is exactly one path this plug answers to.
+    test "a nested path under the well-known prefix passes through", %{opts: opts} do
+      original = conn(:get, "/.well-known/oauth-authorization-server/nested")
+      conn = MCP.OAuth.Plug.Metadata.call(original, opts)
+
+      refute conn.halted
+      assert conn == original
+    end
+
+    test "an unrelated request passes through untouched, not halted", %{opts: opts} do
+      original = conn(:get, "/mcp")
+      conn = MCP.OAuth.Plug.Metadata.call(original, opts)
+
+      refute conn.halted
+      assert conn.status == nil
+      assert conn == original
+    end
   end
 
   describe "MCP.OAuth.Plug.Token, action :token" do

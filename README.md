@@ -53,6 +53,25 @@ end
 
 ```elixir
 # router.ex
+import MCP.Router
+
+mcp "/mcp", otp_app: :my_app, server: MyApp.MCP.Server
+```
+
+```elixir
+# endpoint.ex, above `plug MyAppWeb.Router`
+plug MCP.Plug.WellKnown, otp_app: :my_app, resource: "/mcp", mount: :endpoint
+```
+
+```elixir
+# config.exs
+config :my_app, MCP.Plug, auth: {MCP.Auth.OAuth, store: MyApp.OAuth.Store}
+```
+
+That is `MCP.Router`'s `mcp/2` macro, one `forward` in disguise (see below);
+using it directly instead is just as valid:
+
+```elixir
 forward "/mcp", MCP.Plug,
   server: MyApp.MCP.Server,
   auth: {MCP.Auth.OAuth, store: MyApp.OAuth.Store}
@@ -66,6 +85,54 @@ forward "/.well-known/oauth-protected-resource", MCP.Plug.WellKnown,
 Tool names are validated at compile time against `[A-Za-z0-9_-]`: Anthropic's
 connector layer silently drops anything outside that set, and the server never
 sees the rejection. See `MCP.Name`.
+
+## Router
+
+`MCP.Router` provides two Phoenix router macros, `mcp/2` (above) and
+`mcp_oauth/2`, which mounts the whole OAuth 2.1 authorization server:
+
+```elixir
+import MCP.Router
+
+mcp_oauth "/", otp_app: :my_app, browser: :browser, api: :api
+```
+
+```elixir
+# config.exs
+config :my_app, MCP.OAuth,
+  store: MyApp.OAuth.Store,
+  resource_owner: MyApp.OAuth.ResourceOwner,
+  consent: MyAppWeb.OAuth.Consent,
+  issuer: "https://api.example.com",
+  scopes: {MyApp.OAuth, :scope_names, []},
+  default_resource: {MyApp.OAuth, :mcp_resource, []}
+```
+
+`:browser` and `:api` have no default and are required whenever the endpoint
+that needs them is mounted: `/oauth/authorize` is a session-bearing form POST
+that needs the host's session and CSRF protection, and the other endpoints
+must never see a session cookie, so this library will not guess which
+pipeline is which. `:only`/`:except` subset the six endpoints (an app doing
+only `client_credentials` needs `:token` and `:metadata` and nothing else).
+This library has no `:phoenix` dependency; see `MCP.Router`'s moduledoc for
+how the macros still work, and how they are tested without one. That
+moduledoc also has a full before/after example migrating a hand-written
+router.
+
+## Compile time vs. runtime config
+
+Skip this section if you mounted everything through `MCP.Router` above:
+those macros already read `:otp_app`, `:issuer`, `:scopes`, and
+`:default_resource` from `Application.get_env/2` on every request, not once
+at compile time. It matters if you write your own `forward` calls by hand
+instead (as the low-level examples above do): a router's `forward` calls a
+plug's `init/1` at compile time, so a value read from config *while your
+router compiles* gets baked into the router's bytecode, and a `runtime.exs`
+override of it does nothing in production. Pass an `{m, f, a}` tuple instead
+of a resolved value for anything that should vary by environment; the plugs
+that accept one (`MCP.OAuth.Plug.Metadata`'s `:issuer`, `MCP.Plug.WellKnown`'s
+`:authorization_servers`, and others) resolve it inside `call/2`, fresh on
+every request.
 
 ## Generators
 
@@ -193,9 +260,13 @@ deleted in one piece once clients catch up.
 
 The BEAM has one global module table, so two libraries defining `MCP.Tool`
 cannot coexist in one app. The other Hex package using this namespace
-(`kim-company/mcp`) defines `MCP.Router`, `MCP.Connection`, `MCP.SSE`,
-`MCP.Supervisor`, and `MCP.Application`, none of which this library defines, so
-there is no collision today. Worth rechecking before a major release.
+(`kim-company/mcp`) also defines `MCP.Router`, along with `MCP.Connection`,
+`MCP.SSE`, `MCP.Supervisor`, and `MCP.Application`, none of which this library
+defines except `MCP.Router` itself: this library's `MCP.Router` is Phoenix
+router macros (`mcp/2`, `mcp_oauth/2`); `kim-company/mcp`'s is an MCP client
+connection's supervising router, a different concept that happens to share a
+name. An app cannot depend on both packages. Worth rechecking before a major
+release.
 
 ## Origin
 
