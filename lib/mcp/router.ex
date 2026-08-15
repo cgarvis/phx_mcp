@@ -588,6 +588,25 @@ defmodule MCP.Router do
     end
   end
 
+  # The two branches are not symmetric, and the asymmetry is the whole point.
+  #
+  # A call-site value arrived through the macro's own arguments, so it is
+  # already AST and gets spliced as-is. A config value came from
+  # `Application.get_env/2` at expansion time, so it is a runtime term that has
+  # to be escaped before it can live inside a `quote`.
+  #
+  # Without that escape only self-quoting terms survive: atoms, numbers,
+  # binaries, lists of those, and 2-element tuples. Everything else raises
+  # "invalid quoted expression" at the host's compile time. That covers the
+  # shapes this option actually takes in practice, which is why the omission
+  # was invisible until someone wrote one:
+  #
+  #     auth: {MCP.Auth.OAuth, store: MyApp.OAuth.Store}          # 2-tuple, worked
+  #     auth: {MCP.Auth.Static, base_url: {Endpoint, :url, []}}   # 3-tuple, raised
+  #     auth: {MCP.Auth.Static, tokens: %{"t" => [...]}}          # map, raised
+  #
+  # `MCP.Router.config_backed_value/3` has a note on the same trap from the
+  # other direction: building AST by hand instead of escaping a term.
   defp put_default(acc, key, opts, app_config) do
     case Keyword.fetch(opts, key) do
       {:ok, value} ->
@@ -595,7 +614,7 @@ defmodule MCP.Router do
 
       :error ->
         case Keyword.fetch(app_config, key) do
-          {:ok, value} -> Keyword.put(acc, key, value)
+          {:ok, value} -> Keyword.put(acc, key, Macro.escape(value))
           :error -> acc
         end
     end

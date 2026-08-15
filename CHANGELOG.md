@@ -37,7 +37,12 @@ developed in-tree under `web/lib/mcp`.
   `:scopes`, and `:default_resource` are re-read on every request rather than
   baked in when the router compiles, so a `runtime.exs` override of them
   takes effect.
-- `mount: :endpoint` on `MCP.Plug.WellKnown` and `MCP.OAuth.Plug.Metadata`,
+- `mcp/2` accepts config values of any shape. Options read from
+  `config :otp_app, MCP.Plug, ...` are escaped before being spliced into the
+  generated `forward`, so an `{m, f, a}`, a map, or a struct nested in an
+  adapter's options works. Previously only self-quoting terms survived, and
+  anything else raised `invalid quoted expression` in the host's own compile.
+- - `mount: :endpoint` on `MCP.Plug.WellKnown` and `MCP.OAuth.Plug.Metadata`,
   for mounting `/.well-known/oauth-protected-resource` (RFC 9728) and
   `/.well-known/oauth-authorization-server` (RFC 8414) directly in
   `endpoint.ex`, ahead of the router, where no `scope` prefix can shift them

@@ -66,6 +66,10 @@ plug MCP.Plug.WellKnown, otp_app: :my_app, resource: "/mcp", mount: :endpoint
 ```elixir
 # config.exs
 config :my_app, MCP.Plug, auth: {MCP.Auth.OAuth, store: MyApp.OAuth.Store}
+
+# Adapter options are ordinary terms, so an {m, f, a} or a map is fine here:
+config :my_app, MCP.Plug,
+  auth: {MCP.Auth.Static, otp_app: :my_app, base_url: {MyAppWeb.Endpoint, :url, []}}
 ```
 
 That is `MCP.Router`'s `mcp/2` macro, one `forward` in disguise (see below);

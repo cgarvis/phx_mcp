@@ -389,4 +389,60 @@ defmodule MCP.RouterTest do
     Code.compile_string(source)
     :ok
   end
+
+  describe "config-sourced values that are not self-quoting" do
+    # Reported from a host: `Application.get_env/2` returns runtime terms, and
+    # `quote` only accepts AST. Atoms, binaries, and 2-element tuples are
+    # self-quoting so they survive unescaped, which is why the documented
+    # `auth: {MCP.Auth.OAuth, store: MyApp.OAuth.Store}` never showed the bug.
+    # Anything else raised "invalid quoted expression" in the *host's* compile,
+    # pointing at their router rather than at this macro.
+    setup do
+      on_exit(fn -> Application.delete_env(:mcp_ast_test, MCP.Plug) end)
+    end
+
+    defp compile_router!(name) do
+      Code.compile_string("""
+      defmodule #{name} do
+        use MCP.FakePhoenixRouter
+        import MCP.Router
+
+        mcp "/mcp", otp_app: :mcp_ast_test, server: MCP.TestSupport.TestServer
+      end
+      """)
+    end
+
+    test "an {m, f, a} tuple nested in a config value" do
+      Application.put_env(:mcp_ast_test, MCP.Plug,
+        auth: {MCP.Auth.Static, otp_app: :mcp_ast_test, base_url: {MCP.URL, :join, []}}
+      )
+
+      assert [{module, _bin} | _] = compile_router!(:"Elixir.MCPASTTest.MFA")
+
+      assert [{_scope, _pipes, "/mcp", MCP.Plug, opts}] = module.routes()
+      assert {MCP.Auth.Static, adapter_opts} = opts[:auth]
+      assert adapter_opts[:base_url] == {MCP.URL, :join, []}
+    end
+
+    test "a map nested in a config value" do
+      Application.put_env(:mcp_ast_test, MCP.Plug,
+        auth: {MCP.Auth.Static, tokens: %{"tok" => %{principal: "p", scopes: ["a:read"]}}}
+      )
+
+      assert [{module, _bin} | _] = compile_router!(:"Elixir.MCPASTTest.Map")
+
+      assert [{_scope, _pipes, "/mcp", MCP.Plug, opts}] = module.routes()
+      assert {MCP.Auth.Static, adapter_opts} = opts[:auth]
+      assert adapter_opts[:tokens] == %{"tok" => %{principal: "p", scopes: ["a:read"]}}
+    end
+
+    test "a 2-element tuple still round-trips, the shape that always worked" do
+      Application.put_env(:mcp_ast_test, MCP.Plug, auth: {MCP.Auth.Static, []})
+
+      assert [{module, _bin} | _] = compile_router!(:"Elixir.MCPASTTest.TwoTuple")
+
+      assert [{_scope, _pipes, "/mcp", MCP.Plug, opts}] = module.routes()
+      assert opts[:auth] == {MCP.Auth.Static, []}
+    end
+  end
 end
