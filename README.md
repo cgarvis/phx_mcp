@@ -14,6 +14,10 @@ def deps do
 end
 ```
 
+Requires Elixir 1.20 or later. The tool and prompt DSLs emit `defstruct` from
+`@before_compile`, which lands after the `call/2` and `get/2` clauses that match
+on `%__MODULE__{}`; earlier versions reject that as a compile error.
+
 Depends on `plug`, `plug_crypto`, `jason`, and `:telemetry`, plus `req` as an
 optional dependency used by one swappable transport (see CIMD below). No Ecto,
 no Phoenix, no application callback, and nothing it forces you to supervise.

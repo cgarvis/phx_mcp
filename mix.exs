@@ -7,11 +7,18 @@ defmodule MCP.MixProject do
   # The package is `phx_mcp`; the modules are `MCP.*`. Those are independent in
   # Elixir, and the split is conventional: the `plug_crypto` package defines
   # `Plug.Crypto`, not `PlugCrypto`.
+  #
+  # Elixir ~> 1.20 is a real floor, not caution. The DSLs emit `defstruct` from
+  # `@before_compile`, so it lands after the `call/2` and `get/2` clauses that
+  # match on `%__MODULE__{}`. On 1.17, 1.18, and 1.19 that is a compile error
+  # ("cannot expand struct ..."); 1.20 resolves it. It binds consumers too, not
+  # just this library: any module that does `use MCP.Tool` and matches its own
+  # struct needs 1.20.
   def project do
     [
       app: :phx_mcp,
       version: @version,
-      elixir: "~> 1.17",
+      elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
