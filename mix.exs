@@ -2,17 +2,23 @@ defmodule MCP.MixProject do
   use Mix.Project
 
   @version "0.1.0"
+  @source_url "https://github.com/moxie-health/phx_mcp"
 
+  # The package is `phx_mcp`; the modules are `MCP.*`. Those are independent in
+  # Elixir, and the split is conventional: the `plug_crypto` package defines
+  # `Plug.Crypto`, not `PlugCrypto`.
   def project do
     [
-      app: :mcp,
+      app: :phx_mcp,
       version: @version,
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       docs: docs(),
-      name: "MCP",
+      package: package(),
+      name: "phx_mcp",
+      source_url: @source_url,
       description: description()
     ]
   end
@@ -40,14 +46,25 @@ defmodule MCP.MixProject do
     "Model Context Protocol server kernel for Plug applications, with a built-in OAuth 2.1 authorization server."
   end
 
+  defp package do
+    [
+      name: "phx_mcp",
+      licenses: ["MIT"],
+      links: %{"GitHub" => @source_url},
+      files: ~w(lib .formatter.exs mix.exs README.md)
+    ]
+  end
+
   defp docs do
     [
       main: "MCP",
       extras: ["README.md"],
+      source_ref: "v#{@version}",
       groups_for_modules: [
         Definitions: [MCP.Tool, MCP.Resource, MCP.ResourceTemplate, MCP.Prompt, MCP.Server],
         Transport: [MCP.Plug, MCP.Plug.WellKnown, MCP.RPC, MCP.RPC.Request, MCP.Legacy],
         Authentication: [MCP.Auth, MCP.Auth.OAuth, MCP.Auth.Static, MCP.Context],
+        Generators: [Mix.Tasks.Mcp.Gen.Tool],
         "OAuth server": [
           MCP.OAuth,
           MCP.OAuth.Client,

@@ -4,7 +4,7 @@ defmodule MCP.Auth.Static do
 
   Tokens come from the adapter opts (`tokens:`) or from
   `config <otp_app>, MCP.Auth.Static, tokens: %{...}` where `otp_app:` is an
-  adapter opt naming the host app (default `:mcp`). No config means every
+  adapter opt naming the host app (default `:phx_mcp`). No config means every
   token is rejected, so mounting this adapter unconfigured denies all requests.
 
   `base_url:` is the origin the 401's metadata pointer is built from; see
@@ -29,5 +29,5 @@ defmodule MCP.Auth.Static do
 
   defp tokens(opts), do: opts[:tokens] || config(opts)[:tokens] || %{}
 
-  defp config(opts), do: Application.get_env(opts[:otp_app] || :mcp, __MODULE__, [])
+  defp config(opts), do: Application.get_env(opts[:otp_app] || :phx_mcp, __MODULE__, [])
 end

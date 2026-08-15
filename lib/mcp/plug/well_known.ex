@@ -28,7 +28,7 @@ defmodule MCP.Plug.WellKnown do
       resource: resource,
       resource_segments: String.split(resource, "/", trim: true),
       base_url: opts[:base_url],
-      otp_app: Keyword.get(opts, :otp_app, :mcp),
+      otp_app: Keyword.get(opts, :otp_app, :phx_mcp),
       authorization_servers: opts[:authorization_servers]
     }
   end

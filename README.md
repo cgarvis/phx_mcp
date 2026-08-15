@@ -1,11 +1,18 @@
-# MCP
+# phx_mcp
 
 A Model Context Protocol server kernel for Plug applications, implementing the
 2026-07-28 stateless spec (JSON-RPC 2.0 over HTTP POST), with a built-in OAuth
 2.1 authorization server.
 
-> **Name pending.** `mcp` is taken on Hex, and the root module namespace is
-> being reconsidered before publication. See "Naming" below.
+The package is `phx_mcp`; the modules are `MCP.*`. Those are independent in
+Elixir, and the split is conventional: the `plug_crypto` package defines
+`Plug.Crypto`, not `PlugCrypto`.
+
+```elixir
+def deps do
+  [{:phx_mcp, "~> 0.1"}]
+end
+```
 
 Depends only on `plug`, `plug_crypto`, `jason`, and `:telemetry`. No Ecto, no
 Phoenix, no supervision tree, no application callback. Everything stateful is a
@@ -53,6 +60,33 @@ Tool names are validated at compile time against `[A-Za-z0-9_-]`: Anthropic's
 connector layer silently drops anything outside that set, and the server never
 sees the rejection. See `MCP.Name`.
 
+## Generators
+
+    mix mcp.gen.tool Orders.Get orders_get order_id:string:required limit:integer \\
+      --scope orders:read
+
+    * creating lib/my_app_web/mcp/tools/orders/get.ex
+
+Writes a compiling `MCP.Tool` with its input block and a `call/2` stub, then
+tells you the module to register on your `MCP.Server`. The target path is
+derived from the host app: `lib/<app>_web/mcp/tools/` when a web directory
+exists, otherwise `lib/<app>/mcp/tools/`. Override with `--module` or `--dir`.
+
+Fields are `name:type`, `name:type:required`, or `name:array:element_type`,
+where a type is one of `string`, `integer`, `number`, `boolean`, `date`. The
+tool name goes through `MCP.Name` at generate time, so a dotted name fails
+here rather than compiling into a tool Anthropic clients silently drop.
+
+Generated files compile warning-free under `--warnings-as-errors` and are
+already formatted, provided the host has `import_deps: [:phx_mcp]` in its
+`.formatter.exs` (which is also what keeps `mix format` from rewriting
+`field :code, :string` into `field(:code, :string)`).
+
+The task is `mcp.gen.tool`, not `phx.gen.mcp_tool`: a task's name is its module
+path lowercased, so the latter would mean defining `Mix.Tasks.Phx.Gen.McpTool`
+inside Phoenix's own namespace, where it lists in `mix help` as though it were
+official and breaks the day Phoenix ships the same name.
+
 ## Seams
 
 Nothing stateful lives in the library. Each of these is a behaviour the host
@@ -90,13 +124,13 @@ metadata, and `:telemetry.attach_many/4` to consume them.
 shipping client still opens with. It is quarantined in one file so it can be
 deleted in one piece once clients catch up.
 
-## Naming
+## A note on the `MCP.*` namespace
 
-`mcp` is taken on Hex. `MCP.*` is also a poor namespace to publish under: the
-BEAM has one global module table, so an app cannot use this library alongside
-any other that defines `MCP.Tool`. A rename is pending. The telemetry event
-prefix `[:mcp, ...]` names the protocol rather than the library and is expected
-to survive it.
+The BEAM has one global module table, so two libraries defining `MCP.Tool`
+cannot coexist in one app. The other Hex package using this namespace
+(`kim-company/mcp`) defines `MCP.Router`, `MCP.Connection`, `MCP.SSE`,
+`MCP.Supervisor`, and `MCP.Application`, none of which this library defines, so
+there is no collision today. Worth rechecking before a major release.
 
 ## Origin
 
