@@ -100,7 +100,14 @@ defmodule MCP.MixProject do
       source_ref: "v#{@version}",
       groups_for_modules: [
         Router: [MCP.Router],
-        Definitions: [MCP.Tool, MCP.Resource, MCP.ResourceTemplate, MCP.Prompt, MCP.Server],
+        Definitions: [
+          MCP.Tool,
+          MCP.Resource,
+          MCP.ResourceTemplate,
+          MCP.ResourceLink,
+          MCP.Prompt,
+          MCP.Server
+        ],
         "Client ID Metadata Documents": [
           MCP.OAuth.CIMD,
           MCP.OAuth.CIMD.Cache,

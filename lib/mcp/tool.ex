@@ -70,15 +70,55 @@ defmodule MCP.Tool do
   Return contract for `call/2` (and `resume/3` for multi round-trip tools):
 
     * `{:ok, map}` — completed result, conforming to `output` if declared
+    * `{:ok, map, resource_links}` — the same result, plus pointers to
+      resources this server also serves (see below)
     * `{:input_required, requests, state}` — pause for client input; `requests`
       is a map of request name => request (see `MCP.Elicitation`), `state` is
       any term to restore on resume
     * `{:error, code, message}` — tool execution error (reported in-result with
       `isError: true`, not as a JSON-RPC error)
+
+  ## Resource links
+
+  A tool that finds things can hand back the resources those things are, so
+  the client can read each one with `resources/read`:
+
+      def call(%__MODULE__{query: query}, %MCP.Context{assigns: %{scope: scope}}) do
+        orders = MyApp.Orders.search(scope, query)
+
+        links =
+          for order <- orders do
+            %{
+              uri: "myapp://orders/\#{order.id}",
+              name: "order-\#{order.id}",
+              title: "Order \#\#{order.id}",
+              mime_type: "application/json"
+            }
+          end
+
+        {:ok, %{count: length(orders)}, links}
+      end
+
+  Each link is validated by `MCP.ResourceLink` (which is also where the
+  accepted keys are documented) and emitted as a `resource_link` content block
+  after the result's text block, in the order the tool returned them.
+  `structuredContent` is untouched: it is still exactly the map, and an
+  `output` block still constrains exactly that map and nothing else. A link
+  that fails validation is the tool's own bug, so it is refused as an internal
+  error rather than sent malformed — the same treatment a result violating its
+  `outputSchema` gets. A `{:error, code, message}` carries no links.
+
+  The links ride in `content` rather than in `structuredContent` because
+  `resource_link` is the protocol's own way of saying "this is a resource you
+  can read": a client renders one and follows it knowing nothing about this
+  server. A URI in structured output is just a string, and every client would
+  need a per-server convention to learn that this particular field is
+  fetchable and that one is not.
   """
 
   @type result ::
           {:ok, map()}
+          | {:ok, map(), [MCP.ResourceLink.link()]}
           | {:input_required, requests :: map(), state :: term()}
           | {:error, code :: String.t(), message :: String.t()}
 

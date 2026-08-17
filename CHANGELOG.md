@@ -42,6 +42,12 @@ developed in-tree under `web/lib/mcp`.
   generated `forward`, so an `{m, f, a}`, a map, or a struct nested in an
   adapter's options works. Previously only self-quoting terms survived, and
   anything else raised `invalid quoted expression` in the host's own compile.
+- `resource_link` content blocks in tool results. `c:MCP.Tool.call/2` and
+  `c:MCP.Tool.resume/3` gain a three-element success tuple,
+  `{:ok, map, resource_links}`, whose links are plain snake_case maps validated
+  by the new `MCP.ResourceLink` and emitted after the result's text block.
+  `structuredContent` is unchanged, and the two-element `{:ok, map}` behaves
+  exactly as before.
 - - `mount: :endpoint` on `MCP.Plug.WellKnown` and `MCP.OAuth.Plug.Metadata`,
   for mounting `/.well-known/oauth-protected-resource` (RFC 9728) and
   `/.well-known/oauth-authorization-server` (RFC 8414) directly in

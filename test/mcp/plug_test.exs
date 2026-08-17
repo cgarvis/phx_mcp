@@ -712,6 +712,55 @@ defmodule MCP.PlugTest do
     end
   end
 
+  describe "tools/call resource links" do
+    test "links follow the text block in the order the tool returned them" do
+      result = json(dispatch(request("tools/call", %{"name" => "link"})))["result"]
+
+      assert [%{"type" => "text", "text" => text}, first, second] = result["content"]
+
+      assert first == %{
+               "type" => "resource_link",
+               "uri" => "test://items/42",
+               "name" => "item-42",
+               "title" => "Item 42",
+               "description" => "Item 42 as a resource",
+               "mimeType" => "application/json",
+               "annotations" => %{"audience" => ["assistant"]}
+             }
+
+      assert second["uri"] == "test://items/43"
+      assert Jason.decode!(text) == result["structuredContent"]
+      assert result["isError"] == false
+    end
+
+    # Links are content, not structure: they never touch structuredContent,
+    # which is still exactly the map the tool returned.
+    test "structuredContent is the result map alone" do
+      result = json(dispatch(request("tools/call", %{"name" => "link"})))["result"]
+
+      assert result["structuredContent"] == %{"ids" => ["42", "43"]}
+    end
+
+    test "a tool that returns no links emits the text block alone" do
+      params = %{"name" => "echo", "arguments" => %{"text" => "hi"}}
+      result = json(dispatch(request("tools/call", params)))["result"]
+
+      assert [%{"type" => "text"}] = result["content"]
+    end
+
+    # The link is the tool's bug; sending the rest of the result would hide it.
+    test "a link that fails validation is refused, not sent" do
+      log =
+        capture_log(fn ->
+          error = json(dispatch(request("tools/call", %{"name" => "bad_link"})))["error"]
+          assert error == %{"code" => -32603, "message" => "Internal error"}
+        end)
+
+      assert log =~ "invalid resource link"
+      assert log =~ "missing required :uri"
+    end
+  end
+
   describe "MRTR" do
     test "pause, then resume with input responses" do
       result = json(dispatch(request("tools/call", %{"name" => "hold"})))["result"]
@@ -835,6 +884,23 @@ defmodule MCP.PlugTest do
       error = json(dispatch(request("tools/call", params, id: 2)))["error"]
 
       assert error["code"] == -32602
+    end
+
+    # resume/3 returns the same contract call/2 does, links included.
+    test "a resumed result carries its resource links too" do
+      params = %{"name" => "link", "arguments" => %{"hold" => true}}
+      handle = json(dispatch(request("tools/call", params)))["result"]["requestState"]
+
+      responses = %{"which" => %{"action" => "accept", "content" => %{"reply" => "42"}}}
+      params = %{"name" => "link", "inputResponses" => responses, "requestState" => handle}
+      resumed = json(dispatch(request("tools/call", params, id: 2)))["result"]
+
+      assert resumed["structuredContent"] == %{"ids" => ["42"]}
+
+      assert [
+               %{"type" => "text"},
+               %{"type" => "resource_link", "uri" => "test://items/42"}
+             ] = resumed["content"]
     end
 
     test "eliciting a client that never declared elicitation is a -32021 with HTTP 400" do

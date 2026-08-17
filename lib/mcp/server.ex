@@ -672,6 +672,8 @@ defmodule MCP.Server do
   end
 
   defp outcome({:ok, _result}), do: :ok
+  # A result carrying resource links is still an ordinary success.
+  defp outcome({:ok, _result, _links}), do: :ok
   defp outcome({:input_required, _requests, _state}), do: :input_required
   defp outcome({:error, :not_found}), do: :not_found
   defp outcome({:error, _message}), do: :error
@@ -680,10 +682,15 @@ defmodule MCP.Server do
   defp outcome(:error), do: :error
   defp outcome(_other), do: :invalid
 
-  defp wrap({:ok, result}, entry, _ctx, _opts) when is_map(result) do
+  # The two-element form is the three-element one with no links, so both take
+  # the same path and a tool that returns none encodes exactly as before.
+  defp wrap({:ok, result}, entry, ctx, opts) when is_map(result),
+    do: wrap({:ok, result, []}, entry, ctx, opts)
+
+  defp wrap({:ok, result, links}, entry, _ctx, _opts) when is_map(result) and is_list(links) do
     case MCP.Tool.validate_result(entry.module, result) do
       :ok ->
-        encode_result(result, entry)
+        encode_result(result, links, entry)
 
       # Sending it anyway would break the outputSchema promise, so refuse.
       {:error, errors} ->
@@ -744,23 +751,51 @@ defmodule MCP.Server do
     {:error, {RPC.internal_error(), "Internal error", nil}}
   end
 
+  # Either half can refuse the result, and both refuse it the same way: log
+  # what the tool did wrong, answer an internal error, send nothing partial.
+  defp encode_result(result, links, entry) do
+    with {:ok, encoded} <- encode_structured(result, entry),
+         {:ok, blocks} <- resource_link_blocks(links, entry) do
+      {:ok,
+       %{
+         "resultType" => "complete",
+         "isError" => false,
+         # The text block first, then one block per link, in the tool's order.
+         "content" => [%{"type" => "text", "text" => encoded} | blocks],
+         "structuredContent" => result
+       }}
+    end
+  end
+
   # A tool without an output block has nothing checking its shape, so encoding
   # is the last place a bad term can surface; it must not escape as a 500.
-  defp encode_result(result, entry) do
+  defp encode_structured(result, entry) do
     case Jason.encode(result) do
       {:ok, encoded} ->
-        {:ok,
-         %{
-           "resultType" => "complete",
-           "isError" => false,
-           "content" => [%{"type" => "text", "text" => encoded}],
-           "structuredContent" => result
-         }}
+        {:ok, encoded}
 
       {:error, error} ->
         Logger.error("MCP tool #{entry.name} returned an unencodable result: #{inspect(error)}")
         {:error, {RPC.internal_error(), "Internal error", nil}}
     end
+  end
+
+  # Link validation runs here, past the span that guards call/2 itself, so a
+  # rejected link is caught into the internal-error path rather than escaping
+  # dispatch as a 500 -- the same shape encode_messages/1 uses for prompt
+  # annotations. A malformed link is the tool's bug, and dropping it silently
+  # would leave the client short a resource with nothing said about it.
+  defp resource_link_blocks([], _entry), do: {:ok, []}
+
+  defp resource_link_blocks(links, entry) do
+    {:ok, Enum.map(links, &MCP.ResourceLink.new!/1)}
+  rescue
+    error in ArgumentError ->
+      Logger.error(
+        "MCP tool #{entry.name} returned an invalid resource link: #{Exception.message(error)}"
+      )
+
+      {:error, {RPC.internal_error(), "Internal error", nil}}
   end
 
   # A server may only ask a client for what the client declared it can do.

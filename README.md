@@ -90,6 +90,48 @@ Tool names are validated at compile time against `[A-Za-z0-9_-]`: Anthropic's
 connector layer silently drops anything outside that set, and the server never
 sees the rejection. See `MCP.Name`.
 
+### Resource links
+
+A tool that finds things can point at the resources those things are, so the
+client can read each one with `resources/read`:
+
+```elixir
+defmodule MyApp.Orders.Search do
+  use MCP.Tool, name: "orders_search", scopes: ["orders:read"]
+
+  @impl true
+  def description, do: "Find orders matching a query."
+
+  input do
+    field :query, :string, required: true
+  end
+
+  @impl true
+  def call(%__MODULE__{query: query}, %MCP.Context{assigns: %{scope: scope}}) do
+    orders = MyApp.Orders.search(scope, query)
+
+    links =
+      for order <- orders do
+        %{uri: "myapp://orders/#{order.id}", name: "order-#{order.id}"}
+      end
+
+    {:ok, %{count: length(orders)}, links}
+  end
+end
+```
+
+Those URIs are the ones an `MCP.ResourceTemplate` on `myapp://orders/{id}`
+already serves. Each link becomes a `resource_link` content block after the
+result's text block, in the order returned; `structuredContent` is still
+exactly the map. `MCP.ResourceLink` documents the accepted keys and rejects a
+bad link loudly rather than putting it on the wire.
+
+The links ride in `content` rather than in the structured result because
+`resource_link` is the protocol's own way of saying "this is a resource you can
+read" -- a client renders and follows one with no per-server convention, while
+a URI in structured output is just a string it would have to be told how to
+interpret.
+
 ## Router
 
 `MCP.Router` provides two Phoenix router macros, `mcp/2` (above) and

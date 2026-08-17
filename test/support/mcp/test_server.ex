@@ -11,7 +11,9 @@ defmodule MCP.TestSupport.TestServer do
       MCP.TestSupport.FailTool,
       MCP.TestSupport.RaiseTool,
       MCP.TestSupport.DriftTool,
-      MCP.TestSupport.UnencodableTool
+      MCP.TestSupport.UnencodableTool,
+      MCP.TestSupport.LinkTool,
+      MCP.TestSupport.BadLinkTool
     ],
     resources: [
       MCP.TestSupport.NoteResource,
