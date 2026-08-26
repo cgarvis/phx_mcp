@@ -195,6 +195,25 @@ defmodule MCP.ServerTest do
       do: {:ok, {:blob, <<137, 80, 78, 71>>}, "image/png"}
   end
 
+  defmodule ReservedPathTemplate do
+    @moduledoc false
+
+    # {+path} is the ResourceTemplate-facing half of reserved expansion: the
+    # struct field is named `path`, not `+path`, and it receives whatever the
+    # matcher claimed -- slashes included -- percent-decoded.
+    use MCP.ResourceTemplate,
+      uri_template: "servertest://reserved/{+path}",
+      name: "reserved-path",
+      mime_type: "application/octet-stream",
+      scopes: []
+
+    @impl true
+    def description, do: "A stored file addressed by its full, possibly nested, path"
+
+    @impl true
+    def read(_uri, %__MODULE__{path: path}, _ctx), do: {:ok, path}
+  end
+
   defmodule MimeOverrideServer do
     @moduledoc "Kernel test fixture: per-object mime overrides across resource shapes."
 
@@ -202,7 +221,7 @@ defmodule MCP.ServerTest do
       name: "mime-override-server",
       version: "1.0.0",
       resources: [MimeOverrideResource, NilMimeOverrideResource, InvalidMimeOverrideResource],
-      resource_templates: [FileTemplate]
+      resource_templates: [FileTemplate, ReservedPathTemplate]
   end
 
   defmodule TitledPrompt do
@@ -532,6 +551,30 @@ defmodule MCP.ServerTest do
         end)
 
       assert log =~ "invalid mime override"
+    end
+  end
+
+  describe "reserved expansion ({+var}) resource templates" do
+    test "the struct field is named without the +, carrying a multi-segment value" do
+      {:ok, result} =
+        MCP.Server.dispatch(
+          MimeOverrideServer,
+          read_request("servertest://reserved/reports/2026-08-25.md"),
+          @ctx
+        )
+
+      assert [%{"text" => "reports/2026-08-25.md"}] = result["contents"]
+    end
+
+    test "a single-segment value matches too" do
+      {:ok, result} =
+        MCP.Server.dispatch(
+          MimeOverrideServer,
+          read_request("servertest://reserved/report.md"),
+          @ctx
+        )
+
+      assert [%{"text" => "report.md"}] = result["contents"]
     end
   end
 end

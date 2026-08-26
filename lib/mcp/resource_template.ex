@@ -31,6 +31,15 @@ defmodule MCP.ResourceTemplate do
   `%__MODULE__{}` makes a variable the template does not declare a compile
   error instead of a clause that silently never matches.
 
+  A trailing `{+var}` (see `MCP.URITemplate`) is the one variable allowed to
+  contain `/`, for a family addressed by a whole path rather than one
+  segment. It has to be the template's last expression -- nothing may follow
+  it -- and its struct field is named without the `+`: `{+path}` is the field
+  `path`, exactly like `{path}` would be. Because `/` is unencoded in
+  reserved expansion, `%2F` decodes to a literal `/` too, so `a%2Fb` and `a/b`
+  land in that field identically; a template author who needs to tell those
+  apart cannot, from the URI alone.
+
   Scopes gate listing and matching, but `read/3` must still check per-object
   access and return `{:error, :not_found}` on failure — the wire error is
   identical to a URI that matches nothing, so the URI space is not an

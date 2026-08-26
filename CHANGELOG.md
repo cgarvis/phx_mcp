@@ -19,6 +19,22 @@
   refused as an internal error rather than shipped, the same treatment an
   unencodable result already gets.
 
+- `MCP.URITemplate` gains RFC 6570 Level-2 reserved expansion, `{+var}`: a
+  variable that may claim `/` instead of stopping at it, for a family
+  addressed by a whole path rather than one segment --
+  `croft://{org}/{ws}/files/{+path}` matching a stored file at
+  `reports/2026-08-25.md`. It is legal only as a template's final expression;
+  a literal or another variable after it raises `ArgumentError` at
+  `compile!/1`, since two reserved variables (or one followed by more
+  template) would make matching combinatorial over attacker-supplied URIs
+  and resolve any ambiguous split by arbitrary greedy-match order rather than
+  a rule. The variable's name excludes the leading `+` -- `{+path}` is the
+  field `path` on the generated `MCP.ResourceTemplate` struct, same as
+  `{path}` would be -- and, because reserved expansion leaves `/` unencoded,
+  `%2F` decodes to a literal `/` there too, so `a%2Fb` and `a/b` are
+  indistinguishable once matched. Plain `{var}` is unaffected: it still never
+  crosses a `/` and still rejects a value that decodes to one.
+
 ## 0.1.1 — 2026-08-26
 
 ### Added

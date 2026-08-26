@@ -52,4 +52,75 @@ defmodule MCP.URITemplateTest do
       assert_raise ArgumentError, fn -> URITemplate.compile!(bad) end
     end
   end
+
+  describe "reserved expansion ({+var})" do
+    test "claims a multi-segment value, slashes included" do
+      t = URITemplate.compile!("app://files/{+path}")
+
+      assert URITemplate.match(t, "app://files/reports/2026-08-25.md") ==
+               {:ok, %{"path" => "reports/2026-08-25.md"}}
+    end
+
+    test "also matches a single-segment value" do
+      t = URITemplate.compile!("app://files/{+path}")
+
+      assert URITemplate.match(t, "app://files/report.md") == {:ok, %{"path" => "report.md"}}
+    end
+
+    test "still never matches an empty value" do
+      t = URITemplate.compile!("app://files/{+path}")
+
+      assert URITemplate.match(t, "app://files/") == :nomatch
+    end
+
+    test "%2F decodes to a literal slash, same as writing it unescaped" do
+      t = URITemplate.compile!("app://files/{+path}")
+
+      assert URITemplate.match(t, "app://files/a%2Fb") == {:ok, %{"path" => "a/b"}}
+      assert URITemplate.match(t, "app://files/a/b") == {:ok, %{"path" => "a/b"}}
+    end
+
+    test "invalid UTF-8 is still refused" do
+      t = URITemplate.compile!("app://files/{+path}")
+
+      assert URITemplate.match(t, "app://files/%FF") == :nomatch
+    end
+
+    test "the variable name excludes the leading +" do
+      t = URITemplate.compile!("app://files/{+path}")
+
+      assert t.vars == ["path"]
+    end
+
+    test "compile! rejects a {+var} that is not the template's final expression" do
+      for bad <- [
+            "app://{+path}/end",
+            "app://{+a}/{+b}",
+            "app://{+path}{other}"
+          ] do
+        assert_raise ArgumentError, fn -> URITemplate.compile!(bad) end
+      end
+    end
+
+    test "compile! rejects {+} and {++x}" do
+      assert_raise ArgumentError, fn -> URITemplate.compile!("app://files/{+}") end
+      assert_raise ArgumentError, fn -> URITemplate.compile!("app://files/{++x}") end
+    end
+
+    test "a template that is only {+var} is legal and claims the whole URI" do
+      t = URITemplate.compile!("{+everything}")
+
+      assert URITemplate.match(t, "app://files/reports/2026-08-25.md") ==
+               {:ok, %{"everything" => "app://files/reports/2026-08-25.md"}}
+
+      assert URITemplate.match(t, "") == :nomatch
+    end
+  end
+
+  test "a plain {var} still refuses a value containing or decoding to a slash" do
+    t = URITemplate.compile!("app://items/{id}")
+
+    assert URITemplate.match(t, "app://items/a/b") == :nomatch
+    assert URITemplate.match(t, "app://items/a%2Fb") == :nomatch
+  end
 end
