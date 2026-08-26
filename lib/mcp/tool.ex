@@ -17,8 +17,15 @@ defmodule MCP.Tool do
       end
 
   `input` fields support types `:string`, `:integer`, `:number`, `:boolean`,
-  `:date`, `:array` and options `required:`, `enum:`, `description:`,
-  `default:`. `:integer` and `:number` additionally take `min:`/`max:`, which
+  `:date`, `:array`, `:object`, `:any` and options `required:`, `enum:`,
+  `description:`, `default:`. An `:object` is a bare JSON object (`{"type":
+  "object"}`) and an `:any` is an unconstrained JSON value (no `type` at all,
+  which is how JSON Schema spells "anything"); both reach `call/2` as the
+  decoded term. Neither takes a nested schema — this DSL is deliberately not
+  full JSON Schema, and an argument that is genuinely "whatever the caller's
+  own schema says" (a workflow's input payload, a stored document value) has
+  nothing narrower to promise. Both are also legal as an array's `items:`,
+  since a list of records is the common shape. `:integer` and `:number` additionally take `min:`/`max:`, which
   emit JSON Schema's `minimum`/`maximum` and are enforced before `call/2`, so
   a bound never has to be restated in a tool body. A `:date` is a string on
   the wire, emitted as
@@ -26,7 +33,7 @@ defmodule MCP.Tool do
   receives a `%Date{}` — so no tool re-parses one, and a malformed day is a
   -32602 like any other bad argument rather than a per-tool error branch. An
   `:array` field also takes `items:` (required — the element type, one of the
-  four scalars) and `max_items:` (optional). `enum:` on an array field
+  scalars or `:object`/`:any`) and `max_items:` (optional). `enum:` on an array field
   constrains each element, not the list itself, so the schema nests it inside
   the array's `items` sub-schema rather than on the property. The same
   declarations emit the `inputSchema` JSON Schema map at compile time and
@@ -134,7 +141,14 @@ defmodule MCP.Tool do
   @optional_callbacks resume: 3
 
   @scalar_types [:string, :integer, :number, :boolean, :date]
-  @field_types @scalar_types ++ [:array]
+  # An :object is a bare JSON object and an :any is an unconstrained JSON
+  # value. Neither is a scalar, and neither carries a nested schema: this DSL
+  # is deliberately not full JSON Schema, and a tool whose argument really is
+  # "whatever the caller's own schema says" (a workflow's input payload, a
+  # document value) has nothing more specific to promise. They are legal as
+  # array `items:` too, since a list of records is the common shape.
+  @item_types @scalar_types ++ [:object, :any]
+  @field_types @scalar_types ++ [:array, :object, :any]
 
   defmacro __using__(opts) do
     name = Keyword.fetch!(opts, :name)
@@ -314,7 +328,7 @@ defmodule MCP.Tool do
   # get type-checked, so it can't be left out once type is :array.
   defp validate_array_opts!(name, :array, opts) do
     case opts[:items] do
-      items when items in @scalar_types ->
+      items when items in @item_types ->
         :ok
 
       nil ->
@@ -324,7 +338,7 @@ defmodule MCP.Tool do
       items ->
         raise ArgumentError,
               "MCP.Tool field #{inspect(name)} has invalid items: #{inspect(items)}; " <>
-                "must be one of #{inspect(@scalar_types)}"
+                "must be one of #{inspect(@item_types)}"
     end
 
     case opts[:max_items] do
@@ -385,6 +399,9 @@ defmodule MCP.Tool do
 
   # A date is a string on the wire; `format` is what says which kind of string.
   defp base_property(:date), do: %{"type" => "string", "format" => "date"}
+  # An :any deliberately emits no "type" at all -- in JSON Schema, an absent
+  # type is what "any value" means, and naming one would exclude the others.
+  defp base_property(:any), do: %{}
   defp base_property(type), do: %{"type" => json_type(type)}
 
   # enum: constrains an array's elements, so it nests inside "items" rather
@@ -530,6 +547,8 @@ defmodule MCP.Tool do
   defp correct_type?(:number, value), do: is_number(value)
   defp correct_type?(:boolean, value), do: is_boolean(value)
   defp correct_type?(:array, value), do: is_list(value)
+  defp correct_type?(:object, value), do: is_map(value)
+  defp correct_type?(:any, _value), do: true
   defp correct_type?(:date, value), do: match?({:ok, _date}, cast_date(value))
 
   # Already-cast values pass through so a `default:` can be written as ~D[...].
@@ -557,6 +576,8 @@ defmodule MCP.Tool do
   defp json_type(:boolean), do: "boolean"
   defp json_type(:array), do: "array"
   defp json_type(:date), do: "date"
+  defp json_type(:object), do: "object"
+  defp json_type(:any), do: "any"
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

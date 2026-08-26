@@ -60,6 +60,22 @@ defmodule MCP.ToolTest.BoundedTool do
   def call(%__MODULE__{} = args, _ctx), do: {:ok, %{limit: args.limit}}
 end
 
+defmodule JsonTool do
+  use MCP.Tool, name: "json_tool", scopes: []
+
+  @impl true
+  def description, do: "Takes shapes this DSL deliberately does not model"
+
+  input do
+    field :payload, :object, required: true, description: "Caller-defined object"
+    field :value, :any, required: true, description: "Any JSON-serializable value"
+    field :rows, :array, items: :object, description: "Records"
+  end
+
+  @impl true
+  def call(%__MODULE__{} = args, %MCP.Context{}), do: {:ok, %{ok: args.payload}}
+end
+
 defmodule MCP.ToolTest do
   use ExUnit.Case, async: true
 
@@ -543,6 +559,65 @@ defmodule MCP.ToolTest do
   test "field rejects unsupported types at compile time" do
     assert_raise ArgumentError, ~r/must be one of/, fn ->
       MCP.Tool.__field__(:bad, :map, [])
+    end
+  end
+
+  describe ":object and :any fields" do
+    test "emit a bare object schema, and an :any with no type at all" do
+      props = JsonTool.input_schema()["properties"]
+
+      assert props["payload"] == %{"type" => "object", "description" => "Caller-defined object"}
+
+      # An absent "type" is how JSON Schema spells "any value"; naming one
+      # would exclude every other JSON type.
+      assert props["value"] == %{"description" => "Any JSON-serializable value"}
+
+      # No nested schema: :object is a leaf, so items carries no "properties".
+      assert props["rows"] == %{
+               "type" => "array",
+               "items" => %{"type" => "object"},
+               "description" => "Records"
+             }
+    end
+
+    test "accept objects, arbitrary scalars, and lists of objects" do
+      assert {:ok, args} =
+               MCP.Tool.validate_args(JsonTool, %{
+                 "payload" => %{"a" => %{"deeply" => "nested"}},
+                 "value" => 42,
+                 "rows" => [%{"x" => 1}, %{"y" => "two"}]
+               })
+
+      assert args.payload == %{"a" => %{"deeply" => "nested"}}
+      assert args.value == 42
+      assert args.rows == [%{"x" => 1}, %{"y" => "two"}]
+    end
+
+    test ":any accepts every JSON shape, including null" do
+      for value <- [nil, true, 1.5, "text", [1, 2], %{"k" => "v"}] do
+        assert {:ok, args} =
+                 MCP.Tool.validate_args(JsonTool, %{"payload" => %{}, "value" => value})
+
+        assert args.value == value
+      end
+    end
+
+    test ":object still refuses a non-object" do
+      assert {:error, errors} =
+               MCP.Tool.validate_args(JsonTool, %{"payload" => "nope", "value" => 1})
+
+      assert "payload must be a object" in errors
+    end
+
+    test "an array of objects refuses a list of scalars" do
+      assert {:error, errors} =
+               MCP.Tool.validate_args(JsonTool, %{
+                 "payload" => %{},
+                 "value" => 1,
+                 "rows" => ["not an object"]
+               })
+
+      assert "rows items must be object" in errors
     end
   end
 end
