@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 — 2026-08-26
+
+### Added
+
+- `MCP.Tool` input field types `:object` (a bare JSON object) and `:any` (an
+  unconstrained JSON value), also legal as array `items:`. Both are leaves,
+  not a nested schema language: an argument whose shape is defined by user
+  data at runtime -- a workflow's trigger payload, a document store's value,
+  a record stream's rows -- had no representable type, and encoding those as
+  JSON strings misleads the model, since `inputSchema` is what it reads.
+
 ## 0.1.0 — 2026-08-26
 
 Initial extraction from the Moxie application, where this library was
