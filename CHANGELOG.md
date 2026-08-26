@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `c:MCP.Resource.read/1` and `c:MCP.ResourceTemplate.read/3` gain a
+  three-element success return, `{:ok, content, mime}`, overriding the
+  module's declared `mime_type()` for that one response. A resource template
+  serving a family of stored objects -- files by extension, say -- has no
+  single real MIME type to declare; previously every object had to be served
+  as whatever placeholder `mime_type()` named, or as `nil`, forcing clients
+  to discover the encoding by failure. `nil` for the override falls back to
+  the declared type, the same as the existing two-element return, so no
+  existing resource or template changes. The override is answered only from
+  `resources/read`; `resources/list` and `resources/templates/list` keep
+  advertising the module's own declared type, which is the family-level
+  default. A non-binary, non-`nil` override is the host app's bug and is
+  refused as an internal error rather than shipped, the same treatment an
+  unencodable result already gets.
+
 ## 0.1.1 — 2026-08-26
 
 ### Added

@@ -1,6 +1,8 @@
 defmodule MCP.ServerTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   defmodule TitledTool do
     @moduledoc false
 
@@ -120,6 +122,87 @@ defmodule MCP.ServerTest do
 
     @impl true
     def read(_uri, %__MODULE__{id: id}, _ctx), do: {:ok, %{id: id}}
+  end
+
+  defmodule MimeOverrideResource do
+    @moduledoc false
+
+    use MCP.Resource,
+      uri: "servertest://mime-override",
+      name: "mime-override",
+      mime_type: "application/json",
+      scopes: []
+
+    @impl true
+    def description, do: "Declares JSON but reads back whatever the object actually is"
+
+    @impl true
+    def read(_ctx), do: {:ok, "a,b,c\n1,2,3", "text/csv"}
+  end
+
+  defmodule NilMimeOverrideResource do
+    @moduledoc false
+
+    use MCP.Resource,
+      uri: "servertest://mime-override-nil",
+      name: "mime-override-nil",
+      mime_type: "text/plain",
+      scopes: []
+
+    @impl true
+    def description, do: "A nil override falls back to the declared type"
+
+    @impl true
+    def read(_ctx), do: {:ok, "plain", nil}
+  end
+
+  defmodule InvalidMimeOverrideResource do
+    @moduledoc false
+
+    use MCP.Resource,
+      uri: "servertest://mime-override-invalid",
+      name: "mime-override-invalid",
+      mime_type: "text/plain",
+      scopes: []
+
+    @impl true
+    def description, do: "Returns a non-binary mime override, which is the host app's bug"
+
+    @impl true
+    def read(_ctx), do: {:ok, "plain", :not_a_string}
+  end
+
+  defmodule FileTemplate do
+    @moduledoc false
+
+    # The motivating case: mime_type() can only ever be a placeholder for a
+    # family whose members don't share a real type, so each object's read
+    # names its own.
+    use MCP.ResourceTemplate,
+      uri_template: "servertest://files/{name}",
+      name: "file",
+      mime_type: "application/octet-stream",
+      scopes: []
+
+    @impl true
+    def description, do: "A stored file whose real type is read back per object"
+
+    @impl true
+    def read(_uri, %__MODULE__{name: "data.json"}, _ctx),
+      do: {:ok, %{"a" => 1}, "application/json"}
+
+    def read(_uri, %__MODULE__{name: "logo.png"}, _ctx),
+      do: {:ok, {:blob, <<137, 80, 78, 71>>}, "image/png"}
+  end
+
+  defmodule MimeOverrideServer do
+    @moduledoc "Kernel test fixture: per-object mime overrides across resource shapes."
+
+    use MCP.Server,
+      name: "mime-override-server",
+      version: "1.0.0",
+      resources: [MimeOverrideResource, NilMimeOverrideResource, InvalidMimeOverrideResource],
+      resource_templates: [FileTemplate]
   end
 
   defmodule TitledPrompt do
@@ -382,6 +465,73 @@ defmodule MCP.ServerTest do
                )
 
       assert code == MCP.RPC.internal_error()
+    end
+  end
+
+  describe "per-object mime override" do
+    test "a 3-element {:ok, content, mime} overrides the module's declared mimeType" do
+      {:ok, result} =
+        MCP.Server.dispatch(MimeOverrideServer, read_request("servertest://mime-override"), @ctx)
+
+      assert [%{"mimeType" => "text/csv", "text" => "a,b,c\n1,2,3"}] = result["contents"]
+    end
+
+    test "the override has no effect on resources/list, which keeps the declared type" do
+      [entry] = MCP.Server.build_resource_entries!([MimeOverrideResource])
+      assert entry.payload["mimeType"] == "application/json"
+    end
+
+    test "a map content override applies the same way" do
+      {:ok, result} =
+        MCP.Server.dispatch(
+          MimeOverrideServer,
+          read_request("servertest://files/data.json"),
+          @ctx
+        )
+
+      assert [%{"mimeType" => "application/json", "text" => text}] = result["contents"]
+      assert Jason.decode!(text) == %{"a" => 1}
+    end
+
+    test "a blob content override applies the same way" do
+      {:ok, result} =
+        MCP.Server.dispatch(MimeOverrideServer, read_request("servertest://files/logo.png"), @ctx)
+
+      assert [%{"mimeType" => "image/png", "blob" => blob}] = result["contents"]
+      assert Base.decode64!(blob) == <<137, 80, 78, 71>>
+    end
+
+    test "the override has no effect on resources/templates/list either" do
+      [entry] = MCP.Server.build_template_entries!([FileTemplate])
+      assert entry.payload["mimeType"] == "application/octet-stream"
+    end
+
+    test "nil falls back to the declared mime_type rather than omitting mimeType" do
+      {:ok, result} =
+        MCP.Server.dispatch(
+          MimeOverrideServer,
+          read_request("servertest://mime-override-nil"),
+          @ctx
+        )
+
+      assert [%{"mimeType" => "text/plain", "text" => "plain"}] = result["contents"]
+    end
+
+    test "a non-binary, non-nil override is an internal error, not a wire value" do
+      log =
+        capture_log(fn ->
+          assert {:error, {code, message, _data}} =
+                   MCP.Server.dispatch(
+                     MimeOverrideServer,
+                     read_request("servertest://mime-override-invalid"),
+                     @ctx
+                   )
+
+          assert code == MCP.RPC.internal_error()
+          assert message == "Internal error"
+        end)
+
+      assert log =~ "invalid mime override"
     end
   end
 end

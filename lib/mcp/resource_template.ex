@@ -38,6 +38,31 @@ defmodule MCP.ResourceTemplate do
   (`Repo.get!`, or `defexception plug_status: :not_found`) is equivalent.
   Other returns are as `c:MCP.Resource.read/1`.
 
+  A template's declared `mime_type()` is necessarily one constant for the
+  whole family, which breaks down as soon as the family's members don't
+  share a type — a stored file served by `{+path}`, say, where the real
+  type comes from the object's own extension and `mime_type()` can only ever
+  be a placeholder like `application/octet-stream`. `read/3` returns
+  `{:ok, content, mime}` to set the real type for that one response;
+  `resources/templates/list` keeps advertising the declared placeholder,
+  since that's the family-level default clients see before reading anything:
+
+      defmodule MyApp.MCP.Resources.File do
+        use MCP.ResourceTemplate,
+          uri_template: "myapp://files/{+path}",
+          name: "file",
+          mime_type: "application/octet-stream",
+          scopes: ["files:read"]
+
+        @impl true
+        def read(_uri, %__MODULE__{path: path}, ctx) do
+          case MyApp.Files.fetch(ctx.principal, path) do
+            {:ok, %{contents: contents, mime_type: mime}} -> {:ok, {:blob, contents}, mime}
+            :error -> {:error, :not_found}
+          end
+        end
+      end
+
   `cache_scope:` and `ttl_ms:` override the server-level `list_cache` default
   from `MCP.Server` for this template's own `resources/read` response only.
   `"public"` means the response may be cached and re-served across different
@@ -63,7 +88,9 @@ defmodule MCP.ResourceTemplate do
   @callback cache_scope() :: String.t() | nil
   @callback ttl_ms() :: pos_integer() | nil
   @callback read(uri :: String.t(), params :: struct(), ctx :: MCP.Context.t()) ::
-              {:ok, MCP.Resource.content()} | {:error, :not_found | String.t()}
+              {:ok, MCP.Resource.content()}
+              | {:ok, MCP.Resource.content(), String.t() | nil}
+              | {:error, :not_found | String.t()}
   @callback complete(arg_name :: String.t(), value :: String.t(), ctx :: MCP.Context.t()) ::
               {:ok, [String.t()]} | :error
   @optional_callbacks complete: 3

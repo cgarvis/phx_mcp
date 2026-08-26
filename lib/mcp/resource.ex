@@ -22,6 +22,13 @@ defmodule MCP.Resource do
     * `{:ok, text}` — text contents, served with the resource's MIME type
     * `{:ok, {:blob, binary}}` — binary contents, base64-encoded on the wire
     * `{:ok, map}` — JSON-encoded as text contents
+    * `{:ok, content, mime}` — any of the above, served with `mime` instead
+      of the module's declared `mime_type()` for this one response; `nil`
+      falls back to the declared type, same as omitting the third element.
+      This is for a resource whose real type isn't known until the object
+      is read — see `MCP.ResourceTemplate` for the motivating example, a
+      stored file typed by its own extension. It has no effect on
+      `resources/list`, which always advertises the module's declared type.
     * `{:error, :not_found}` — the same -32602 Resource-not-found error a
       nonexistent URI gets; use it for object-level denials
     * `{:error, message}` — surfaced as a -32603 internal JSON-RPC error
@@ -55,7 +62,9 @@ defmodule MCP.Resource do
   @callback cache_scope() :: String.t() | nil
   @callback ttl_ms() :: pos_integer() | nil
   @callback read(ctx :: MCP.Context.t()) ::
-              {:ok, content} | {:error, :not_found | String.t()}
+              {:ok, content}
+              | {:ok, content, String.t() | nil}
+              | {:error, :not_found | String.t()}
 
   defmacro __using__(opts) do
     quote bind_quoted: [opts: opts] do

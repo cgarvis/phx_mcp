@@ -843,6 +843,24 @@ defmodule MCP.Server do
   defp required_capability("roots/list"), do: "roots"
   defp required_capability(_method), do: nil
 
+  # The two-element form is the three-element one with no override, so a
+  # resource that never returns one encodes exactly as before. Resolving the
+  # mime here and re-dispatching on the plain {:ok, content} clauses below
+  # keeps the blob/text/map encoding logic in one place rather than tripled.
+  defp wrap_read({:ok, content, mime_override}, uri, mime, cache) do
+    case resolve_mime(mime_override, mime) do
+      {:ok, resolved_mime} ->
+        wrap_read({:ok, content}, uri, resolved_mime, cache)
+
+      :error ->
+        Logger.error(
+          "MCP resource #{uri} returned an invalid mime override: #{inspect(mime_override)}"
+        )
+
+        {:error, {RPC.internal_error(), "Internal error", nil}}
+    end
+  end
+
   defp wrap_read({:ok, {:blob, binary}}, uri, mime, cache) when is_binary(binary),
     do: contents_result(uri, mime, "blob", Base.encode64(binary), cache)
 
@@ -875,6 +893,14 @@ defmodule MCP.Server do
     Logger.error("MCP resource #{uri} returned an invalid result: #{inspect(other)}")
     {:error, {RPC.internal_error(), "Internal error", nil}}
   end
+
+  # nil means "use the module's declared type", not "omit mimeType" -- every
+  # resource entry already advertises one via mime_type(), so opting out of
+  # the override reads the same as never returning one. Anything else that
+  # isn't a string is the host app's bug, not a value to put on the wire.
+  defp resolve_mime(nil, declared_mime), do: {:ok, declared_mime}
+  defp resolve_mime(mime, _declared_mime) when is_binary(mime), do: {:ok, mime}
+  defp resolve_mime(_invalid, _declared_mime), do: :error
 
   # ReadResourceResult is a CacheableResult in this revision: ttlMs/cacheScope required.
   defp contents_result(uri, mime, key, value, cache) do
