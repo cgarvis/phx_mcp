@@ -306,7 +306,8 @@ defmodule MCP.Server do
     with {:ok, name} <- fetch_prompt_name(params),
          {:ok, entry} <- fetch_visible_prompt(server, name, ctx),
          {:ok, args} <- validate_prompt_args(entry, params["arguments"] || %{}) do
-      %{kind: :prompt, name: entry.name}
+      :prompt
+      |> entry_meta(entry.name, entry)
       |> telemetry_invoke(ctx, fn -> entry.module.get(args, ctx) end)
       |> wrap_get(entry)
     end
@@ -370,7 +371,7 @@ defmodule MCP.Server do
       %{} = entry ->
         if visible?(entry, ctx) do
           {:ok,
-           {%{kind: :resource, name: entry.uri}, entry.mime_type, entry.cache_override,
+           {entry_meta(:resource, entry.uri, entry), entry.mime_type, entry.cache_override,
             fn -> entry.module.read(ctx) end}}
         else
           :error
@@ -385,7 +386,7 @@ defmodule MCP.Server do
               params = template_struct(entry.module, params)
 
               {:ok,
-               {%{kind: :resource_template, name: entry.template.source}, entry.mime_type,
+               {entry_meta(:resource_template, entry.template.source, entry), entry.mime_type,
                 entry.cache_override, fn -> entry.module.read(uri, params, ctx) end}}
 
             :nomatch ->
@@ -480,7 +481,7 @@ defmodule MCP.Server do
   defp complete_values(:empty, _arg_name, _value, _ctx), do: []
 
   defp complete_values(entry, arg_name, value, ctx) do
-    meta = %{kind: :completion, name: completion_meta_name(entry)}
+    meta = entry_meta(:completion, completion_meta_name(entry), entry)
 
     case telemetry_invoke(meta, ctx, fn -> entry.module.complete(arg_name, value, ctx) end) do
       {:ok, values} when is_list(values) -> values
@@ -529,6 +530,19 @@ defmodule MCP.Server do
     end
   end
 
+  @doc """
+  The tool entries `tools/list` would advertise to this caller.
+
+  Scope filtering is per request, so the advertised set is a function of the
+  caller and not of the server module alone. An observer that read
+  `server.tool_entries()` instead would report tools the caller cannot see and
+  cannot call, which is worse than reporting nothing.
+
+  Entries are the kernel's internal shape -- `:module`, `:name`, `:scopes`,
+  `:payload` -- and the wire payload is `entry.payload`.
+  """
+  def visible_tools(server, %MCP.Context{} = ctx), do: visible(server.tool_entries(), ctx)
+
   defp visible(entries, ctx), do: Enum.filter(entries, &visible?(&1, ctx))
 
   defp visible?(entry, ctx), do: entry.scopes -- ctx.scopes == []
@@ -538,7 +552,8 @@ defmodule MCP.Server do
 
     with :ok <- ensure_map_args(args),
          {:ok, validated} <- validate_args(entry, args) do
-      %{kind: :tool, name: entry.name}
+      :tool
+      |> entry_meta(entry.name, entry)
       |> telemetry_invoke(ctx, fn -> entry.module.call(validated, ctx) end)
       |> wrap(entry, ctx, opts)
     end
@@ -570,7 +585,8 @@ defmodule MCP.Server do
   defp resume_with(entry, state, requested, params, ctx, opts) do
     case accepted_content(params["inputResponses"] || %{}, requested) do
       {:ok, content} ->
-        %{kind: :tool, name: entry.name}
+        :tool
+        |> entry_meta(entry.name, entry)
         |> telemetry_invoke(ctx, fn -> entry.module.resume(state, content, ctx) end)
         |> wrap(entry, ctx, opts)
 
@@ -622,10 +638,33 @@ defmodule MCP.Server do
     end)
   end
 
+  # The description and required scopes travel with the span so an observer
+  # never has to reach back into the server module by name to recover them --
+  # a lookup that is both a layering inversion and wrong the moment a name is
+  # reused or a module is renamed. The key is `:required_scopes`, never plain
+  # `:scopes`: the request span carries the caller's *granted* list, a host is
+  # told to attach both spans with one `attach_many/4`, and a shared key would
+  # let one handler blend two unrelated lists with nothing raising.
+  defp entry_meta(kind, name, entry) do
+    %{
+      kind: kind,
+      name: name,
+      description: entry.payload["description"],
+      required_scopes: entry.scopes
+    }
+  end
+
   # Handler span: [:mcp, :handler, :start | :stop | :exception]. See MCP.Telemetry.
   defp span(meta, ctx, fun, rescue_fun) do
     start = System.monotonic_time()
-    metadata = Map.put(meta, :principal, ctx.principal)
+
+    metadata =
+      Map.merge(meta, %{
+        principal: ctx.principal,
+        client: ctx.client,
+        protocol_version: ctx.protocol_version,
+        session_id: ctx.session_id
+      })
 
     :telemetry.execute([:mcp, :handler, :start], %{system_time: System.system_time()}, metadata)
 

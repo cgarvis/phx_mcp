@@ -1,5 +1,107 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- The request span (`[:mcp, :request, :*]`) gains `:granted_scopes`, `:client`,
+  `:protocol_version`, `:session_id`, `:user_agent`, and `:vendor_client`.
+  Every one of these was already in hand at the moment the span was emitted
+  and simply was not passed on, which left a consumer unable to answer
+  questions the kernel already knew the answer to -- which client build is
+  responsible for a latency regression, which declared revisions this server is
+  refusing, whether two callers issuing the identical request diverge because
+  their granted scopes differ. `:granted_scopes` is the caller's own list; `:client` is
+  the `_meta` `clientInfo` object verbatim rather than a flattened name and
+  version, so a client sending unanticipated keys reaches the host intact --
+  but only when it is actually an object. `clientInfo` is unverified and the
+  spec does not constrain its shape, and a non-object forwarded under a key
+  every type signature calls a map would raise in the first consumer that
+  subscripted it, which `:telemetry` punishes by detaching that handler for
+  good. A non-object now reports as `nil`.
+  `:user_agent` is the raw `User-Agent` request header and `:vendor_client` the
+  raw value of the first header in `MCP.Telemetry.vendor_client_headers/0` the
+  request carries -- both HTTP-only and self-reported, `nil` when absent. `:protocol_version` is read before negotiation runs, so a
+  request declaring a revision this server refuses still reports what it
+  declared instead of reporting nothing. Note that it cannot be used to count
+  surviving pre-2026-07-28 clients: `MCP.Legacy` stamps this server's own
+  revision onto a request that declares none, before the span is built, so
+  legacy callers are indistinguishable from current ones on this field.
+
+- The handler span (`[:mcp, :handler, :*]`) gains `:description` and
+  `:required_scopes` from the entry being invoked, plus `:client`,
+  `:protocol_version`, and `:session_id` carried through from the request.
+  The entry fields matter beyond convenience: without them an observer has to
+  reach back into the server module by name to recover a description, which
+  inverts the layering and goes wrong the moment a name is reused across
+  servers or a module is renamed. Neither scope list is called plain
+  `:scopes`, deliberately: `:granted_scopes` is about a caller and
+  `:required_scopes` about a definition, and since `events/0` invites a host
+  to attach all six events with one `:telemetry.attach_many/4`, a shared key
+  would let one handler tagging on `metadata[:scopes]` blend two unrelated
+  lists into one meaningless dimension with nothing raising. Ecto sets the
+  precedent in this project's own dependency tree, qualifying every instance
+  of a repeated concept (`query_time`, `queue_time`, `decode_time`,
+  `idle_time`) rather than leaving one bare.
+
+  A caller-supplied `:session_id` is accepted only if it is at most 128 bytes
+  of visible ASCII, which bounds what any single value can do to a host that
+  logs or tags with it. It does not bound how many *distinct* values arrive, so
+  `:session_id` must not be used directly as a metric label -- see
+  `MCP.Telemetry` for what it is safe for.
+
+- `:session_id`, on both spans, an opaque correlation label resolved per
+  request: a client-supplied `Mcp-Session-Id` header if there is one,
+  otherwise `MCP.Telemetry.instance_id/0`. This is resolution only -- no
+  session lifecycle, no session state, nothing minted, echoed, or stored. The
+  chain is short because the 2026-07-28 revision is stateless by design and
+  defines no conversation or session key anywhere in `_meta`; reading the
+  legacy header at all is justified in `MCP.Telemetry`, along with an honest
+  account of how weak the instance-id fallback is.
+
+- `MCP.Telemetry.vendor_client_headers/0`, the ordered list of request headers
+  checked to populate `:vendor_client`, first match winning. The kernel carries
+  this list rather than exposing it as a plug option: these names are facts
+  about how particular clients behave on the wire, the same kind of fact as a
+  user-agent database, and every host mounting the endpoint would otherwise
+  have to discover and maintain the same list independently. Teaching the
+  library a new vendor is a one-line change with no consumer action. A name
+  earns a place only when the vendor documents it -- guessing is worse than
+  leaving the field nil, since a wrong name is indistinguishable from a caller
+  that sent nothing. Today the list holds `x-anthropic-client` alone; OpenAI
+  documents no such header, and a ChatGPT connector is identified through
+  `:client` and `:user_agent` instead.
+
+- `MCP.Telemetry.instance_id/0`, an opaque random identifier generated on
+  first use and stable for the life of the VM, held in `:persistent_term`. It
+  is deliberately not derived from the node name, host, or boot time: a
+  derived identifier is reproducible by anything that knows the inputs, and
+  this value ends up in a host's analytics store where that invites being
+  treated as a join key onto the deployment itself.
+
+- `MCP.Server.visible_tools/2`, the scope-filtered tool entries `tools/list`
+  would advertise to a given `MCP.Context`. The advertised set is a function
+  of the caller, not of the server module alone, so an observer that read
+  `server.tool_entries()` instead would report tools the caller can neither
+  see nor call. Entries are the kernel's internal shape (`:module`, `:name`,
+  `:scopes`, `:payload`); the wire payload is `entry.payload`.
+
+- `MCP.RPC.meta_protocol_version_key/0`, alongside the `clientInfo` and
+  `clientCapabilities` accessors that already existed, so nothing outside
+  `MCP.RPC` has to restate the `_meta` key as a literal.
+
+- `MCP.Context` gains `:protocol_version` and `:session_id`. Both exist for
+  observability and nothing in the kernel branches on either; they sit on the
+  context because that is already how per-request caller facts from `_meta`
+  reach a handler, and because the handler span needs them.
+
+All of this is additive: no existing metadata key changed name, type, or
+meaning, and a consumer attached to 0.2.0 spans keeps working untouched.
+Spans still carry no tool arguments, no tool results, no resource bodies, no
+prompt arguments, and no request or response payloads -- see the note at the
+top of `MCP.Telemetry` for why that is a standing property and not a default
+awaiting a flag.
+
 ## 0.2.0 — 2026-08-26
 
 ### Added

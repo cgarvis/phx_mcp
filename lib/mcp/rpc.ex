@@ -31,6 +31,7 @@ defmodule MCP.RPC do
   def missing_required_client_capability, do: @missing_required_client_capability
   def unsupported_protocol_version, do: @unsupported_protocol_version
 
+  def meta_protocol_version_key, do: @meta_protocol_version
   def meta_client_info_key, do: @meta_client_info
   def meta_client_capabilities_key, do: @meta_client_capabilities
 

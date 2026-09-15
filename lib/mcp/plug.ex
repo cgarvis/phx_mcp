@@ -33,6 +33,11 @@ defmodule MCP.Plug do
 
   @behaviour Plug
 
+  # Long enough for any identifier format in real use (a UUID is 36 bytes),
+  # short enough that a host tagging metrics with it cannot be handed a
+  # multi-kilobyte label.
+  @max_session_id_bytes 128
+
   import Plug.Conn
 
   alias MCP.RPC
@@ -129,14 +134,32 @@ defmodule MCP.Plug do
       {:ok, req} ->
         ctx = %{
           ctx
-          | client: req.meta[RPC.meta_client_info_key()],
-            capabilities: client_capabilities(req)
+          | client: client_info(req),
+            capabilities: client_capabilities(req),
+            protocol_version: declared_version(req),
+            session_id: session_id(conn)
         }
 
         measured(conn, req, ctx, config)
 
       {:error, error, id} ->
         conn |> respond_error(400, id, error) |> elem(0)
+    end
+  end
+
+  # `clientInfo` is self-reported and unverified, and the spec does not
+  # constrain its shape -- so a caller can send a string, a list, or a number
+  # where an object belongs. It is passed through verbatim when it is a map,
+  # because a client sending keys we did not anticipate should reach the host
+  # intact, but a non-map is dropped rather than forwarded: the struct type,
+  # the span contract, and every consumer all say `map() | nil`, and a bare
+  # string on the span means the first consumer to write `meta.client["name"]`
+  # raises. `:telemetry` responds to a raising handler by detaching it, so that
+  # one crafted request would silence every MCP span on the node until restart.
+  defp client_info(req) do
+    case req.meta[RPC.meta_client_info_key()] do
+      client when is_map(client) -> client
+      _absent_or_malformed -> nil
     end
   end
 
@@ -147,9 +170,73 @@ defmodule MCP.Plug do
     end
   end
 
+  # Read for reporting only, and read before `RPC.negotiate_version/1` has had
+  # its say: a request that declares a version we refuse still gets a span, and
+  # a span that omitted the version it declared would hide exactly the clients
+  # worth finding. A missing or non-string value reports as nil rather than
+  # raising -- negotiation, not telemetry, is what rejects it.
+  defp declared_version(req) do
+    case req.meta[RPC.meta_protocol_version_key()] do
+      version when is_binary(version) -> version
+      _absent -> nil
+    end
+  end
+
+  # See MCP.Telemetry for why the chain is this short and why reading a header
+  # this revision tells servers to ignore is still the honest thing to do here.
+  defp session_id(conn) do
+    case header(conn, "mcp-session-id") do
+      supplied when is_binary(supplied) ->
+        if usable_session_id?(supplied), do: supplied, else: MCP.Telemetry.instance_id()
+
+      nil ->
+        MCP.Telemetry.instance_id()
+    end
+  end
+
+  # The caller chooses this value -- and with `allow_anonymous: true` that
+  # caller need not have authenticated at all. The cap bounds how much damage
+  # any single value can do to a host that logs or tags with it; it cannot
+  # bound how many distinct values arrive, which is the host's problem to
+  # bucket. A value that is not plausibly an identifier is treated as no value
+  # at all, keeping the field always present rather than emitting garbage.
+  defp usable_session_id?(id) do
+    byte_size(id) <= @max_session_id_bytes and visible_ascii?(id)
+  end
+
+  defp visible_ascii?(<<byte, rest::binary>>) when byte in 0x21..0x7E, do: visible_ascii?(rest)
+  defp visible_ascii?(<<>>), do: true
+  defp visible_ascii?(_other), do: false
+
+  # The kernel carries the header list so no host has to; MCP.Telemetry owns it
+  # because that moduledoc is the published contract for what lands on a span.
+  defp vendor_client(conn) do
+    Enum.find_value(MCP.Telemetry.vendor_client_headers(), &header(conn, &1))
+  end
+
+  # First value only: a repeated header is an upstream that cannot agree with
+  # itself, and joining the values would invent a string no client sent.
+  defp header(conn, name) do
+    case get_req_header(conn, name) do
+      [value | _rest] when value != "" -> value
+      _none -> nil
+    end
+  end
+
   defp measured(conn, req, ctx, config) do
     start = System.monotonic_time()
-    metadata = %{method: req.method, name: body_name(req), principal: ctx.principal}
+
+    metadata = %{
+      method: req.method,
+      name: body_name(req),
+      principal: ctx.principal,
+      granted_scopes: ctx.scopes,
+      client: ctx.client,
+      protocol_version: ctx.protocol_version,
+      session_id: ctx.session_id,
+      user_agent: header(conn, "user-agent"),
+      vendor_client: vendor_client(conn)
+    }
 
     :telemetry.execute([:mcp, :request, :start], %{system_time: System.system_time()}, metadata)
 

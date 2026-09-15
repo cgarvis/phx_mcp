@@ -306,6 +306,40 @@ defmodule MCP.ServerTest do
 
   @ctx %MCP.Context{principal: "test-principal", scopes: []}
 
+  describe "visible_tools/2" do
+    test "returns exactly what tools/list would advertise to this caller" do
+      ungated = MCP.Server.visible_tools(MCP.TestSupport.TestServer, @ctx)
+
+      assert Enum.map(ungated, & &1.name) == advertised_names(MCP.TestSupport.TestServer, @ctx)
+      refute "secret" in Enum.map(ungated, & &1.name)
+
+      gated_ctx = %MCP.Context{principal: "test-principal", scopes: ["secret:read"]}
+      gated = MCP.Server.visible_tools(MCP.TestSupport.TestServer, gated_ctx)
+
+      assert Enum.map(gated, & &1.name) == advertised_names(MCP.TestSupport.TestServer, gated_ctx)
+      assert "secret" in Enum.map(gated, & &1.name)
+    end
+
+    test "entries carry the wire payload and the scopes the tool requires" do
+      gated_ctx = %MCP.Context{principal: "test-principal", scopes: ["secret:read"]}
+
+      entry =
+        Enum.find(
+          MCP.Server.visible_tools(MCP.TestSupport.TestServer, gated_ctx),
+          &(&1.name == "secret")
+        )
+
+      assert entry.scopes == ["secret:read"]
+      assert entry.payload["description"] == "Visible only with secret:read"
+    end
+  end
+
+  defp advertised_names(server, ctx) do
+    request = %MCP.RPC.Request{id: 1, method: "tools/list", params: %{}}
+    {:ok, result} = MCP.Server.dispatch(server, request, ctx)
+    Enum.map(result["tools"], & &1["name"])
+  end
+
   describe "validate_cache_scope!/1" do
     test "accepts the two scopes the spec defines" do
       assert MCP.Server.validate_cache_scope!("public") == "public"
